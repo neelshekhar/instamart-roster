@@ -1,103 +1,179 @@
 "use client";
 
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SolverResult } from "@/lib/types";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOURS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`);
 
+type ViewMode = "efficiency" | "surplus";
+
 interface UtilizationHeatmapProps {
   result: SolverResult;
 }
 
-/** Map a staffing ratio to a background color. */
-function cellColor(ratio: number | null): string {
-  if (ratio === null) return "bg-gray-50 text-gray-300";
-  if (ratio === 0) return "bg-red-700 text-white";
-  if (ratio < 0.6) return "bg-red-500 text-white";
-  if (ratio < 0.8) return "bg-orange-400 text-white";
-  if (ratio < 0.95) return "bg-yellow-300 text-gray-800";
-  if (ratio < 1.05) return "bg-green-400 text-white";
-  if (ratio < 1.3) return "bg-green-500 text-white";
-  return "bg-green-700 text-white";
+// ─── Color helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Labor efficiency coloring: required/coverage × 100
+ * 100% = all deployed workers are needed (green)
+ * <100% = some workers idle (yellow → orange as waste grows)
+ * >100% = understaffed — should not happen in optimal solution (red)
+ */
+function efficiencyColor(eff: number | null): { bg: string; text: string } {
+  if (eff === null) return { bg: "#f9fafb", text: "#d1d5db" };   // gray-50 / gray-300
+  if (eff > 100)   return { bg: "#dc2626", text: "#fff" };        // red-600  — understaffed
+  if (eff >= 95)   return { bg: "#16a34a", text: "#fff" };        // green-600 — near-perfect
+  if (eff >= 85)   return { bg: "#4ade80", text: "#14532d" };     // green-400
+  if (eff >= 70)   return { bg: "#facc15", text: "#713f12" };     // yellow-400
+  if (eff >= 50)   return { bg: "#fb923c", text: "#fff" };        // orange-400
+  return           { bg: "#ef4444", text: "#fff" };               // red-500   — heavy waste
 }
 
-function formatPct(ratio: number | null): string {
-  if (ratio === null) return "";
-  return `${Math.round(ratio * 100)}`;
+/**
+ * Surplus coloring: coverage − required
+ * 0  = exact (green)
+ * +N = idle workers (yellow/orange by magnitude)
+ * <0 = deficit (red)
+ */
+function surplusColor(surplus: number | null, required: number): { bg: string; text: string } {
+  if (surplus === null) return { bg: "#f9fafb", text: "#d1d5db" };
+  if (surplus < 0)      return { bg: "#dc2626", text: "#fff" };       // understaffed
+  if (surplus === 0)    return { bg: "#16a34a", text: "#fff" };       // perfect
+  const wasteRatio = required > 0 ? surplus / required : 1;
+  if (wasteRatio < 0.15) return { bg: "#4ade80", text: "#14532d" };   // ≤15% surplus
+  if (wasteRatio < 0.30) return { bg: "#facc15", text: "#713f12" };   // 15–30%
+  if (wasteRatio < 0.50) return { bg: "#fb923c", text: "#fff" };      // 30–50%
+  return                  { bg: "#ef4444", text: "#fff" };             // >50% surplus
 }
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
-  // Compute per-slot staffing ratios and aggregate stats
+  const [view, setView] = useState<ViewMode>("efficiency");
+
+  // Compute per-slot metrics
   let totalRequired = 0;
   let totalCovered = 0;
-  let underCount = 0;
-  let perfectCount = 0;
-  let overCount = 0;
+  let understaffedSlots = 0;
+  let activeSlots = 0;
 
-  const ratios: (number | null)[][] = Array.from({ length: 7 }, (_, d) =>
+  type CellData = { req: number; cov: number; surplus: number; eff: number } | null;
+
+  const cells: CellData[][] = Array.from({ length: 7 }, (_, d) =>
     Array.from({ length: 24 }, (_, h) => {
       const req = result.required[d][h];
       const cov = result.coverage[d][h];
       if (req === 0) return null;
+      activeSlots++;
       totalRequired += req;
       totalCovered += cov;
-      const r = cov / req;
-      if (r < 1) underCount++;
-      else if (r < 1.05) perfectCount++;
-      else overCount++;
-      return r;
+      const surplus = cov - req;
+      if (surplus < 0) understaffedSlots++;
+      const eff = cov > 0 ? Math.round((req / cov) * 100) : 0;
+      return { req, cov, surplus, eff };
     })
   );
 
-  const overallPct = totalRequired > 0 ? Math.round((totalCovered / totalRequired) * 100) : 0;
+  // Key metrics
+  const serviceLevelPct = activeSlots > 0
+    ? Math.round(((activeSlots - understaffedSlots) / activeSlots) * 100)
+    : 100;
+  const laborEfficiencyPct = totalCovered > 0
+    ? Math.round((totalRequired / totalCovered) * 100)
+    : 0;
+  const surplusHours = totalCovered - totalRequired;
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <CardTitle className="text-base">Staffing Utilization Heatmap</CardTitle>
-          <div className="flex items-center gap-3 text-xs flex-wrap">
-            <LegendItem color="bg-red-500" label="< 80%" />
-            <LegendItem color="bg-yellow-300" label="80–95%" />
-            <LegendItem color="bg-green-400" label="95–105%" />
-            <LegendItem color="bg-green-600" label="> 105%" />
-            <LegendItem color="bg-gray-50 border border-gray-200" label="No demand" textColor="text-gray-400" />
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <CardTitle className="text-base">Labor Utilization</CardTitle>
+          {/* View toggle */}
+          <div className="flex rounded-md border border-gray-200 overflow-hidden text-xs">
+            <button
+              onClick={() => setView("efficiency")}
+              className={`px-3 py-1.5 transition-colors ${view === "efficiency" ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              Efficiency %
+            </button>
+            <button
+              onClick={() => setView("surplus")}
+              className={`px-3 py-1.5 transition-colors border-l border-gray-200 ${view === "surplus" ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              Surplus workers
+            </button>
           </div>
         </div>
       </CardHeader>
-      <CardContent>
-        {/* Summary bar */}
-        <div className="grid grid-cols-4 gap-3 mb-5 text-center text-sm">
-          <div className="bg-blue-50 rounded-lg p-2">
-            <div className="font-bold text-blue-700 text-lg">{overallPct}%</div>
-            <div className="text-xs text-gray-500">Overall avg</div>
-          </div>
-          <div className="bg-red-50 rounded-lg p-2">
-            <div className="font-bold text-red-600 text-lg">{underCount}</div>
-            <div className="text-xs text-gray-500">Under-staffed slots</div>
-          </div>
-          <div className="bg-green-50 rounded-lg p-2">
-            <div className="font-bold text-green-600 text-lg">{perfectCount}</div>
-            <div className="text-xs text-gray-500">On-target slots</div>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-2">
-            <div className="font-bold text-gray-600 text-lg">{overCount}</div>
-            <div className="text-xs text-gray-500">Over-staffed slots</div>
-          </div>
+
+      <CardContent className="space-y-5">
+
+        {/* ── KPI cards ── */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <KpiCard
+            value={`${serviceLevelPct}%`}
+            label="Service level"
+            sub="Slots with demand fully met"
+            accent={serviceLevelPct === 100 ? "green" : "red"}
+          />
+          <KpiCard
+            value={`${laborEfficiencyPct}%`}
+            label="Labor efficiency"
+            sub="Of deployed hours actually needed"
+            accent={laborEfficiencyPct >= 85 ? "green" : laborEfficiencyPct >= 70 ? "yellow" : "orange"}
+          />
+          <KpiCard
+            value={totalRequired.toLocaleString()}
+            label="Required worker-hrs"
+            sub="Demand-driven across the week"
+            accent="blue"
+          />
+          <KpiCard
+            value={`+${surplusHours.toLocaleString()}`}
+            label="Surplus worker-hrs"
+            sub="Deployed but not strictly needed"
+            accent="gray"
+          />
         </div>
 
-        {/* Heatmap grid */}
+        {/* ── What does this mean? ── */}
+        <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-800 space-y-1">
+          {view === "efficiency" ? (
+            <>
+              <p className="font-semibold">Reading the Efficiency % heatmap</p>
+              <p>
+                Each cell = <strong>required ÷ available × 100</strong> for that day-hour slot.{" "}
+                <strong>100%</strong> means every deployed worker is needed — zero idle time.{" "}
+                <strong>75%</strong> means 1 in 4 workers is idle in that slot.
+                Green = efficient · Yellow/orange = idle surplus · Red = understaffed.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold">Reading the Surplus workers heatmap</p>
+              <p>
+                Each cell = <strong>available − required</strong> workers in that slot.{" "}
+                <strong>0</strong> = exactly right · <strong>+2</strong> = 2 workers idle that hour ·{" "}
+                negative = understaffed (should not occur in an optimal roster).
+                Green = tight · Yellow/orange = excess coverage · Red = gap.
+              </p>
+            </>
+          )}
+        </div>
+
+        {/* ── Heatmap grid ── */}
         <div className="overflow-x-auto">
-          <table className="border-collapse w-full text-xs">
+          <table className="border-collapse w-full" style={{ tableLayout: "fixed" }}>
             <thead>
               <tr>
-                <th className="text-left px-2 py-1 font-medium text-gray-500 min-w-[36px]" />
+                <th style={{ width: 36 }} />
                 {HOURS.map((h) => (
                   <th
                     key={h}
-                    className="text-center font-normal text-gray-400 px-0 py-1"
-                    style={{ minWidth: 32, width: 32 }}
+                    className="text-center font-normal text-gray-400 pb-1"
+                    style={{ fontSize: 9, width: 32 }}
                   >
                     {h.slice(0, 2)}
                   </th>
@@ -107,74 +183,128 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
             <tbody>
               {DAYS.map((day, d) => (
                 <tr key={day}>
-                  <td className="px-2 py-0.5 font-medium text-gray-600 text-xs whitespace-nowrap">
+                  <td
+                    className="pr-2 font-medium text-gray-600 whitespace-nowrap text-right"
+                    style={{ fontSize: 10 }}
+                  >
                     {day}
                   </td>
-                  {ratios[d].map((ratio, h) => (
-                    <td key={h} className="p-0">
-                      <div
-                        title={
-                          ratio !== null
-                            ? `${day} ${HOURS[h]}: ${Math.round(ratio * 100)}% staffed (${result.coverage[d][h]} / ${result.required[d][h]} workers)`
-                            : `${day} ${HOURS[h]}: No demand`
-                        }
-                        className={`
-                          flex items-center justify-center rounded-sm mx-px my-0.5
-                          font-medium tabular-nums cursor-default select-none
-                          ${cellColor(ratio)}
-                        `}
-                        style={{ height: 28, width: 30, fontSize: 9 }}
-                      >
-                        {ratio !== null ? formatPct(ratio) : ""}
-                      </div>
-                    </td>
-                  ))}
+                  {cells[d].map((cell, h) => {
+                    const { bg, text } = cell === null
+                      ? (view === "efficiency" ? efficiencyColor(null) : surplusColor(null, 0))
+                      : view === "efficiency"
+                      ? efficiencyColor(cell.eff)
+                      : surplusColor(cell.surplus, cell.req);
+
+                    const displayVal = cell === null
+                      ? ""
+                      : view === "efficiency"
+                      ? `${cell.eff}`
+                      : cell.surplus === 0
+                      ? "0"
+                      : `${cell.surplus > 0 ? "+" : ""}${cell.surplus}`;
+
+                    const tooltip = cell === null
+                      ? `${day} ${HOURS[h]}: No demand`
+                      : view === "efficiency"
+                      ? `${day} ${HOURS[h]}: ${cell.eff}% efficient — ${cell.req} needed, ${cell.cov} deployed (${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus)`
+                      : `${day} ${HOURS[h]}: ${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus workers — ${cell.req} needed, ${cell.cov} deployed`;
+
+                    return (
+                      <td key={h} className="p-0">
+                        <div
+                          title={tooltip}
+                          style={{
+                            backgroundColor: bg,
+                            color: text,
+                            height: 26,
+                            width: 30,
+                            fontSize: 8,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            margin: "1px",
+                            borderRadius: 3,
+                            fontWeight: 600,
+                            cursor: "default",
+                            userSelect: "none",
+                            letterSpacing: "-0.3px",
+                          }}
+                        >
+                          {displayVal}
+                        </div>
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
 
-        {/* Labor hours detail */}
-        <div className="mt-5 overflow-x-auto">
-          <p className="text-xs font-medium text-gray-500 mb-2">
-            Labor hours needed vs. available by day
-          </p>
+        {/* ── Legend ── */}
+        <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500">
+          {view === "efficiency" ? (
+            <>
+              <LegendSwatch color="#16a34a" label="≥95% efficient" />
+              <LegendSwatch color="#4ade80" label="85–94%" />
+              <LegendSwatch color="#facc15" label="70–84%" />
+              <LegendSwatch color="#fb923c" label="50–69%" />
+              <LegendSwatch color="#ef4444" label="<50% / understaffed" />
+              <LegendSwatch color="#f9fafb" label="No demand" border />
+            </>
+          ) : (
+            <>
+              <LegendSwatch color="#16a34a" label="0 surplus (exact)" />
+              <LegendSwatch color="#4ade80" label="+1 to 15%" />
+              <LegendSwatch color="#facc15" label="+15 to 30%" />
+              <LegendSwatch color="#fb923c" label="+30 to 50%" />
+              <LegendSwatch color="#ef4444" label=">50% / deficit" />
+              <LegendSwatch color="#f9fafb" label="No demand" border />
+            </>
+          )}
+        </div>
+
+        {/* ── Per-day summary table ── */}
+        <div>
+          <p className="text-xs font-medium text-gray-500 mb-2">Per-day summary</p>
           <table className="text-xs w-full border-collapse">
             <thead>
               <tr className="border-b border-gray-200">
-                <th className="text-left py-1 px-2 text-gray-500 font-medium">Day</th>
-                <th className="text-right py-1 px-2 text-gray-500 font-medium">Needed</th>
-                <th className="text-right py-1 px-2 text-gray-500 font-medium">Available</th>
-                <th className="text-right py-1 px-2 text-gray-500 font-medium">Gap</th>
-                <th className="py-1 px-2 text-gray-500 font-medium">Fill rate</th>
+                <th className="text-left py-1.5 px-2 text-gray-500 font-medium">Day</th>
+                <th className="text-right py-1.5 px-2 text-gray-500 font-medium">Required hrs</th>
+                <th className="text-right py-1.5 px-2 text-gray-500 font-medium">Deployed hrs</th>
+                <th className="text-right py-1.5 px-2 text-gray-500 font-medium">Surplus hrs</th>
+                <th className="py-1.5 px-2 text-gray-500 font-medium">Labor efficiency</th>
               </tr>
             </thead>
             <tbody>
               {DAYS.map((day, d) => {
-                const needed = result.required[d].reduce((a, b) => a + b, 0);
-                const avail = result.coverage[d].reduce((a, b) => a + b, 0);
-                const gap = avail - needed;
-                const fill = needed > 0 ? avail / needed : 1;
+                const req = result.required[d].reduce((a, b) => a + b, 0);
+                const dep = result.coverage[d].reduce((a, b) => a + b, 0);
+                const surplus = dep - req;
+                const eff = dep > 0 ? Math.round((req / dep) * 100) : 0;
+                if (req === 0) return null;
                 return (
                   <tr key={day} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="py-1.5 px-2 font-medium">{day}</td>
-                    <td className="py-1.5 px-2 text-right tabular-nums">{needed}</td>
-                    <td className="py-1.5 px-2 text-right tabular-nums">{avail}</td>
-                    <td className={`py-1.5 px-2 text-right tabular-nums font-medium ${gap < 0 ? "text-red-600" : "text-green-600"}`}>
-                      {gap >= 0 ? "+" : ""}{gap}
+                    <td className="py-1.5 px-2 text-right tabular-nums">{req}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums">{dep}</td>
+                    <td className={`py-1.5 px-2 text-right tabular-nums font-medium ${surplus < 0 ? "text-red-600" : surplus === 0 ? "text-green-600" : "text-gray-500"}`}>
+                      {surplus >= 0 ? "+" : ""}{surplus}
                     </td>
                     <td className="py-1.5 px-2">
                       <div className="flex items-center gap-2">
                         <div className="flex-1 bg-gray-100 rounded-full h-1.5">
                           <div
-                            className={`h-1.5 rounded-full ${fill >= 1 ? "bg-green-500" : fill >= 0.8 ? "bg-yellow-400" : "bg-red-500"}`}
-                            style={{ width: `${Math.min(100, Math.round(fill * 100))}%` }}
+                            className="h-1.5 rounded-full"
+                            style={{
+                              width: `${Math.min(100, eff)}%`,
+                              backgroundColor: eff >= 85 ? "#16a34a" : eff >= 70 ? "#eab308" : "#f97316",
+                            }}
                           />
                         </div>
-                        <span className="w-9 text-right tabular-nums text-gray-600">
-                          {Math.round(fill * 100)}%
-                        </span>
+                        <span className="w-9 text-right tabular-nums text-gray-700 font-medium">{eff}%</span>
                       </div>
                     </td>
                   </tr>
@@ -183,24 +313,49 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
             </tbody>
           </table>
         </div>
+
       </CardContent>
     </Card>
   );
 }
 
-function LegendItem({
-  color,
-  label,
-  textColor = "text-gray-700",
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+const accentMap = {
+  green:  { bg: "bg-green-50",  val: "text-green-700" },
+  red:    { bg: "bg-red-50",    val: "text-red-700" },
+  yellow: { bg: "bg-yellow-50", val: "text-yellow-700" },
+  orange: { bg: "bg-orange-50", val: "text-orange-700" },
+  blue:   { bg: "bg-blue-50",   val: "text-blue-700" },
+  gray:   { bg: "bg-gray-50",   val: "text-gray-700" },
+};
+
+function KpiCard({
+  value, label, sub, accent,
 }: {
-  color: string;
+  value: string;
   label: string;
-  textColor?: string;
+  sub: string;
+  accent: keyof typeof accentMap;
 }) {
+  const c = accentMap[accent];
   return (
-    <div className="flex items-center gap-1">
-      <div className={`w-4 h-4 rounded-sm ${color}`} />
-      <span className={textColor}>{label}</span>
+    <div className={`${c.bg} rounded-lg p-3`}>
+      <div className={`text-2xl font-bold ${c.val}`}>{value}</div>
+      <div className="text-xs font-medium text-gray-700 mt-0.5">{label}</div>
+      <div className="text-xs text-gray-400 mt-0.5 leading-tight">{sub}</div>
+    </div>
+  );
+}
+
+function LegendSwatch({ color, label, border }: { color: string; label: string; border?: boolean }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <div
+        style={{ backgroundColor: color, width: 14, height: 14, borderRadius: 2 }}
+        className={border ? "border border-gray-200" : ""}
+      />
+      <span>{label}</span>
     </div>
   );
 }
