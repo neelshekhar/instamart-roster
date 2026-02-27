@@ -6,7 +6,8 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "postinstall": "cp node_modules/highs/build/highs.wasm public/highs.wasm"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
