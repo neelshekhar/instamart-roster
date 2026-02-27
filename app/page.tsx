@@ -167,7 +167,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="max-w-5xl mx-auto px-4 py-8 text-center text-xs text-gray-400">
-        Runs entirely in your browser via HiGHS WASM · No data leaves your machine
+        Runs entirely in your browser via HiGHS WASM · No data leaves your machine · Built by Neelshekhar
       </footer>
     </div>
   );
