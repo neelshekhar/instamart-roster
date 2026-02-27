@@ -97,20 +97,32 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
             />
             <NumberField
               label="Part-timer Cap"
-              description="Max PT + WPT as % of total workforce"
+              description="Max PT + WPT as % of total workforce. Enter 0 to allow no part-timers at all."
               value={raw.partTimerCapPct}
               unit="%"
-              hint="0 = no part-timers, 100 = all part-timers"
+              hint={
+                config.partTimerCapPct === 0
+                  ? "No part-timers (PT/WPT) will be assigned"
+                  : config.partTimerCapPct === 100
+                  ? "Unconstrained — any mix of PT/FT allowed"
+                  : `PT + WPT ≤ ${config.partTimerCapPct}% of total headcount`
+              }
               min={0}
               max={100}
               onChange={(v) => handleChange("partTimerCapPct", v, 0, 100)}
             />
             <NumberField
               label="Weekender Cap"
-              description="Max WFT + WPT as % of total workforce"
+              description="Max WFT + WPT as % of total workforce. Enter 0 to allow no weekenders at all."
               value={raw.weekenderCapPct}
               unit="%"
-              hint="0 = no weekenders, 100 = all weekenders"
+              hint={
+                config.weekenderCapPct === 0
+                  ? "No weekenders (WFT/WPT) will be assigned"
+                  : config.weekenderCapPct === 100
+                  ? "Unconstrained — any mix of weekenders/regulars allowed"
+                  : `WFT + WPT ≤ ${config.weekenderCapPct}% of total headcount`
+              }
               min={0}
               max={100}
               onChange={(v) => handleChange("weekenderCapPct", v, 0, 100)}

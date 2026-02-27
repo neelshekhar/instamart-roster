@@ -106,33 +106,60 @@ function buildLP(input: SolverInput): string {
   }
 
   // ── PT cap ─────────────────────────────────────────────────────────────────
-  if (alpha > 0 && alpha < 1) {
-    const ptCapTerms: string[] = [];
-    PT_STARTS.forEach((s) =>
-      MON_FRI.forEach((p) => ptCapTerms.push(`${(1 - alpha).toFixed(6)} ${varPT(s, p)}`))
-    );
-    PT_STARTS.forEach((s) => ptCapTerms.push(`${(1 - alpha).toFixed(6)} ${varWPT(s)}`));
-    FT_STARTS.forEach((s) =>
-      MON_FRI.forEach((p) => ptCapTerms.push(`${(-alpha).toFixed(6)} ${varFT(s, p)}`))
-    );
-    FT_STARTS.forEach((s) => ptCapTerms.push(`${(-alpha).toFixed(6)} ${varWFT(s)}`));
-    conCount++;
-    lines.push(` c${conCount}: ${ptCapTerms.join(" + ")} <= 0`);
+  // alpha = partTimerCapPct / 100
+  // alpha = 0  → no PT/WPT allowed at all  → force sum to 0
+  // alpha = 1  → unconstrained             → skip
+  // 0 < alpha < 1 → (1-alpha)*(PT+WPT) - alpha*(FT+WFT) <= 0
+  if (alpha < 1) {
+    const ptVars: string[] = [];
+    PT_STARTS.forEach((s) => MON_FRI.forEach((p) => ptVars.push(varPT(s, p))));
+    PT_STARTS.forEach((s) => ptVars.push(varWPT(s)));
+
+    if (alpha === 0) {
+      // Hard zero: every PT/WPT variable individually <= 0
+      ptVars.forEach((v) => {
+        conCount++;
+        lines.push(` c${conCount}: ${v} <= 0`);
+      });
+    } else {
+      const ftVars: string[] = [];
+      FT_STARTS.forEach((s) => MON_FRI.forEach((p) => ftVars.push(varFT(s, p))));
+      FT_STARTS.forEach((s) => ftVars.push(varWFT(s)));
+      const terms = [
+        ...ptVars.map((v) => `${(1 - alpha).toFixed(6)} ${v}`),
+        ...ftVars.map((v) => `${(-alpha).toFixed(6)} ${v}`),
+      ];
+      conCount++;
+      lines.push(` c${conCount}: ${terms.join(" + ")} <= 0`);
+    }
   }
 
   // ── Weekender cap ──────────────────────────────────────────────────────────
-  if (beta > 0 && beta < 1) {
-    const wkCapTerms: string[] = [];
-    FT_STARTS.forEach((s) => wkCapTerms.push(`${(1 - beta).toFixed(6)} ${varWFT(s)}`));
-    PT_STARTS.forEach((s) => wkCapTerms.push(`${(1 - beta).toFixed(6)} ${varWPT(s)}`));
-    FT_STARTS.forEach((s) =>
-      MON_FRI.forEach((p) => wkCapTerms.push(`${(-beta).toFixed(6)} ${varFT(s, p)}`))
-    );
-    PT_STARTS.forEach((s) =>
-      MON_FRI.forEach((p) => wkCapTerms.push(`${(-beta).toFixed(6)} ${varPT(s, p)}`))
-    );
-    conCount++;
-    lines.push(` c${conCount}: ${wkCapTerms.join(" + ")} <= 0`);
+  // beta = weekenderCapPct / 100
+  // beta = 0  → no WFT/WPT allowed at all  → force sum to 0
+  // beta = 1  → unconstrained              → skip
+  // 0 < beta < 1 → (1-beta)*(WFT+WPT) - beta*(FT+PT) <= 0
+  if (beta < 1) {
+    const wkVars: string[] = [];
+    FT_STARTS.forEach((s) => wkVars.push(varWFT(s)));
+    PT_STARTS.forEach((s) => wkVars.push(varWPT(s)));
+
+    if (beta === 0) {
+      wkVars.forEach((v) => {
+        conCount++;
+        lines.push(` c${conCount}: ${v} <= 0`);
+      });
+    } else {
+      const wdVars: string[] = [];
+      FT_STARTS.forEach((s) => MON_FRI.forEach((p) => wdVars.push(varFT(s, p))));
+      PT_STARTS.forEach((s) => MON_FRI.forEach((p) => wdVars.push(varPT(s, p))));
+      const terms = [
+        ...wkVars.map((v) => `${(1 - beta).toFixed(6)} ${v}`),
+        ...wdVars.map((v) => `${(-beta).toFixed(6)} ${v}`),
+      ];
+      conCount++;
+      lines.push(` c${conCount}: ${terms.join(" + ")} <= 0`);
+    }
   }
 
   // ── Bounds ─────────────────────────────────────────────────────────────────
