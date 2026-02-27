@@ -8,6 +8,7 @@ import { ConfigPanel } from "@/components/ConfigPanel";
 import { ResultsSummary } from "@/components/ResultsSummary";
 import { RosterTable } from "@/components/RosterTable";
 import { CoverageChart } from "@/components/CoverageChart";
+import { UtilizationHeatmap } from "@/components/UtilizationHeatmap";
 import { runOptimizer } from "@/lib/optimizer";
 import type { OphMatrix, OptimizerConfig, SolverResult } from "@/lib/types";
 
@@ -144,11 +145,15 @@ export default function Home() {
 
             <ResultsSummary result={result} />
 
-            <Tabs defaultValue="chart">
+            <Tabs defaultValue="heatmap">
               <TabsList>
+                <TabsTrigger value="heatmap">Utilization Heatmap</TabsTrigger>
                 <TabsTrigger value="chart">Coverage Chart</TabsTrigger>
                 <TabsTrigger value="roster">Roster Table</TabsTrigger>
               </TabsList>
+              <TabsContent value="heatmap" className="mt-4">
+                <UtilizationHeatmap result={result} />
+              </TabsContent>
               <TabsContent value="chart" className="mt-4">
                 <CoverageChart result={result} />
               </TabsContent>

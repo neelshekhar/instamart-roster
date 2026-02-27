@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import type { OptimizerConfig, OphMatrix } from "@/lib/types";
 
@@ -15,7 +15,6 @@ interface ConfigPanelProps {
 }
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
 function matrixStats(oph: OphMatrix) {
   let total = 0;
@@ -24,11 +23,9 @@ function matrixStats(oph: OphMatrix) {
   let peakVal = 0;
   let activeSlots = 0;
   for (let d = 0; d < 7; d++) {
-    let daySum = 0;
     for (let h = 0; h < 24; h++) {
       const v = oph[d][h];
       total += v;
-      daySum += v;
       if (v > peakVal) { peakVal = v; peakDay = d; peakHour = h; }
       if (v > 0) activeSlots++;
     }
@@ -43,12 +40,23 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
     weekenderCapPct: 30,
   });
 
+  // Raw string state so users can freely type without the field snapping
+  const [raw, setRaw] = useState({
+    productivityRate: "12",
+    partTimerCapPct: "40",
+    weekenderCapPct: "30",
+  });
+
   const stats = matrixStats(oph);
   const peakRequired = Math.ceil(stats.peakVal / config.productivityRate);
 
-  const update = (key: keyof OptimizerConfig, value: number) => {
-    setConfig((prev) => ({ ...prev, [key]: value }));
-  };
+  function handleChange(key: keyof OptimizerConfig, strVal: string, min: number, max: number) {
+    setRaw((prev) => ({ ...prev, [key]: strVal }));
+    const n = parseFloat(strVal);
+    if (!isNaN(n) && n >= min && n <= max) {
+      setConfig((prev) => ({ ...prev, [key]: n }));
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -67,48 +75,47 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
         </CardContent>
       </Card>
 
-      {/* Config sliders */}
+      {/* Config inputs */}
       <Card>
         <CardHeader>
           <CardTitle>Optimizer Configuration</CardTitle>
           <CardDescription>
-            Tune these parameters before running the ILP solver.
+            Set these parameters before running the ILP solver.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-8">
-          <SliderField
-            label="Productivity Rate"
-            description="Orders per picker per productive hour"
-            value={config.productivityRate}
-            min={5}
-            max={30}
-            step={1}
-            unit="OPH"
-            extra={`Peak staffing needed: ${peakRequired} workers`}
-            onChange={(v) => update("productivityRate", v)}
-          />
-
-          <SliderField
-            label="Part-timer Cap"
-            description="Maximum PT + WPT as a % of total workforce"
-            value={config.partTimerCapPct}
-            min={0}
-            max={80}
-            step={5}
-            unit="%"
-            onChange={(v) => update("partTimerCapPct", v)}
-          />
-
-          <SliderField
-            label="Weekender Cap"
-            description="Maximum WFT + WPT as a % of total workforce"
-            value={config.weekenderCapPct}
-            min={0}
-            max={60}
-            step={5}
-            unit="%"
-            onChange={(v) => update("weekenderCapPct", v)}
-          />
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <NumberField
+              label="Productivity Rate"
+              description="Orders per picker per productive hour"
+              value={raw.productivityRate}
+              unit="OPH"
+              hint={`Peak staffing: ${peakRequired} workers`}
+              min={1}
+              max={100}
+              onChange={(v) => handleChange("productivityRate", v, 1, 100)}
+            />
+            <NumberField
+              label="Part-timer Cap"
+              description="Max PT + WPT as % of total workforce"
+              value={raw.partTimerCapPct}
+              unit="%"
+              hint="0 = no part-timers, 100 = all part-timers"
+              min={0}
+              max={100}
+              onChange={(v) => handleChange("partTimerCapPct", v, 0, 100)}
+            />
+            <NumberField
+              label="Weekender Cap"
+              description="Max WFT + WPT as % of total workforce"
+              value={raw.weekenderCapPct}
+              unit="%"
+              hint="0 = no weekenders, 100 = all weekenders"
+              min={0}
+              max={100}
+              onChange={(v) => handleChange("weekenderCapPct", v, 0, 100)}
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -119,45 +126,16 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <ShiftRule
-              type="FT"
-              label="Full-time"
-              hours="9h slot, 8h productive"
-              starts="05:00 – 15:00"
-              off="One weekday off (Mon–Fri)"
-            />
-            <ShiftRule
-              type="PT"
-              label="Part-time"
-              hours="4h straight, no break"
-              starts="05:00 – 20:00"
-              off="One weekday off (Mon–Fri)"
-            />
-            <ShiftRule
-              type="WFT"
-              label="Weekend FT"
-              hours="9h slot, 8h productive"
-              starts="05:00 – 15:00"
-              off="Mon–Fri (always off)"
-            />
-            <ShiftRule
-              type="WPT"
-              label="Weekend PT"
-              hours="4h straight, no break"
-              starts="05:00 – 20:00"
-              off="Mon–Fri (always off)"
-            />
+            <ShiftRule type="FT" label="Full-time" hours="9h slot, 8h productive" starts="05:00 – 15:00" off="One weekday off (Mon–Fri)" />
+            <ShiftRule type="PT" label="Part-time" hours="4h straight, no break" starts="05:00 – 20:00" off="One weekday off (Mon–Fri)" />
+            <ShiftRule type="WFT" label="Weekend FT" hours="9h slot, 8h productive" starts="05:00 – 15:00" off="Mon–Fri (always off)" />
+            <ShiftRule type="WPT" label="Weekend PT" hours="4h straight, no break" starts="05:00 – 20:00" off="Mon–Fri (always off)" />
           </div>
         </CardContent>
       </Card>
 
       <div className="flex justify-end">
-        <Button
-          size="lg"
-          onClick={() => onSolve(config)}
-          disabled={solving}
-          className="min-w-[220px]"
-        >
+        <Button size="lg" onClick={() => onSolve(config)} disabled={solving} className="min-w-[220px]">
           {solving ? (
             <span className="flex items-center gap-2">
               <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
@@ -184,60 +162,49 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-interface SliderFieldProps {
+interface NumberFieldProps {
   label: string;
   description: string;
-  value: number;
+  value: string;
+  unit: string;
+  hint?: string;
   min: number;
   max: number;
-  step: number;
-  unit: string;
-  extra?: string;
-  onChange: (v: number) => void;
+  onChange: (v: string) => void;
 }
 
-function SliderField({ label, description, value, min, max, step, unit, extra, onChange }: SliderFieldProps) {
+function NumberField({ label, description, value, unit, hint, min, max, onChange }: NumberFieldProps) {
+  const n = parseFloat(value);
+  const invalid = isNaN(n) || n < min || n > max;
+
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <Label className="text-sm font-medium">{label}</Label>
-          <p className="text-xs text-gray-500 mt-0.5">{description}</p>
-        </div>
-        <Badge variant="outline" className="text-base px-3 py-1 font-bold">
-          {value} {unit}
+    <div className="space-y-2">
+      <Label className="text-sm font-medium">{label}</Label>
+      <p className="text-xs text-gray-500">{description}</p>
+      <div className="flex items-center gap-2">
+        <Input
+          type="number"
+          value={value}
+          min={min}
+          max={max}
+          onChange={(e) => onChange(e.target.value)}
+          className={`w-full ${invalid ? "border-red-400 focus-visible:ring-red-400" : ""}`}
+        />
+        <Badge variant="outline" className="shrink-0 px-2 py-1 font-medium">
+          {unit}
         </Badge>
       </div>
-      <Slider
-        value={[value]}
-        min={min}
-        max={max}
-        step={step}
-        onValueChange={([v]) => onChange(v)}
-        className="w-full"
-      />
-      <div className="flex justify-between text-xs text-gray-400">
-        <span>{min}{unit}</span>
-        {extra && <span className="text-blue-600 font-medium">{extra}</span>}
-        <span>{max}{unit}</span>
-      </div>
+      {invalid && (
+        <p className="text-xs text-red-500">Must be between {min} and {max}</p>
+      )}
+      {!invalid && hint && (
+        <p className="text-xs text-blue-600">{hint}</p>
+      )}
     </div>
   );
 }
 
-function ShiftRule({
-  type,
-  label,
-  hours,
-  starts,
-  off,
-}: {
-  type: string;
-  label: string;
-  hours: string;
-  starts: string;
-  off: string;
-}) {
+function ShiftRule({ type, label, hours, starts, off }: { type: string; label: string; hours: string; starts: string; off: string }) {
   const colors: Record<string, string> = {
     FT: "bg-blue-100 text-blue-800",
     PT: "bg-green-100 text-green-800",
