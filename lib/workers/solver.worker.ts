@@ -180,66 +180,66 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
     return v;
   };
 
-  // ── PT cap ─────────────────────────────────────────────────────────────────
-  // Constraint: (PT+WPT) ≤ α × total  →  (1−α)(PT+WPT) − α(FT+WFT) ≤ 0
-  // Multiply through by 100 to use plain integers and avoid LP-parser issues
-  // with decimal coefficient strings (which corrupt HiGHS WASM memory).
-  //   capPt = round(partTimerCapPct)  →  pos coeff = 100-capPt, neg coeff = capPt
+  // ── Cap constraints ────────────────────────────────────────────────────────
+  // When a cap is 0 we DON'T add individual "xi <= 0" constraint rows —
+  // HiGHS WASM crashes when many single-variable constraint rows are present
+  // (LP-parser buffer overflow).  Instead we fix those variables to 0 via
+  // upper bounds in the Bounds section below (semantically identical).
+  // When a cap is between 0 and 100 we emit a single aggregated row using
+  // integer coefficients (×100 scaled) to avoid decimal strings.
   const capPt = Math.round(config.partTimerCapPct);
-  if (capPt < 100) {
+  const capWk = Math.round(config.weekenderCapPct);
+  // fixPT: xPT and xWPT bounded to 0;  fixWk: xWFT and xWPT bounded to 0
+  const fixPT  = capPt === 0;
+  const fixWk  = capWk === 0;
+  const fixWPT = fixPT || fixWk;  // WPT is zero if either PT cap or weekender cap is 0
+
+  if (!fixPT && capPt < 100) {
     const ptVars = allPTVars();
-    if (capPt === 0) {
-      ptVars.forEach((v) => { conCount++; lines.push(` c${conCount}: ${v} <= 0`); });
-    } else {
-      const ftVars = allFTVars();
-      const posCoeff = 100 - capPt;
-      const negCoeff = capPt;
-      const lhs =
-        ptVars.map((v) => `${posCoeff} ${v}`).join(" + ") +
-        " - " +
-        ftVars.map((v) => `${negCoeff} ${v}`).join(" - ");
-      conCount++;
-      lines.push(` c${conCount}: ${lhs} <= 0`);
-    }
+    const ftVars = allFTVars();
+    const posCoeff = 100 - capPt;
+    const negCoeff = capPt;
+    const lhs =
+      ptVars.map((v) => `${posCoeff} ${v}`).join(" + ") +
+      " - " +
+      ftVars.map((v) => `${negCoeff} ${v}`).join(" - ");
+    conCount++;
+    lines.push(` c${conCount}: ${lhs} <= 0`);
   }
 
-  // ── Weekender cap ──────────────────────────────────────────────────────────
-  const capWk = Math.round(config.weekenderCapPct);
-  if (capWk < 100) {
+  if (!fixWk && capWk < 100) {
     const wkVars = allWkVars();
-    if (capWk === 0) {
-      wkVars.forEach((v) => { conCount++; lines.push(` c${conCount}: ${v} <= 0`); });
-    } else {
-      const wdVars = allWdVars();
-      const posCoeff = 100 - capWk;
-      const negCoeff = capWk;
-      const lhs =
-        wkVars.map((v) => `${posCoeff} ${v}`).join(" + ") +
-        " - " +
-        wdVars.map((v) => `${negCoeff} ${v}`).join(" - ");
-      conCount++;
-      lines.push(` c${conCount}: ${lhs} <= 0`);
-    }
+    const wdVars = allWdVars();
+    const posCoeff = 100 - capWk;
+    const negCoeff = capWk;
+    const lhs =
+      wkVars.map((v) => `${posCoeff} ${v}`).join(" + ") +
+      " - " +
+      wdVars.map((v) => `${negCoeff} ${v}`).join(" - ");
+    conCount++;
+    lines.push(` c${conCount}: ${lhs} <= 0`);
   }
 
   // ── Phase 2 only: total workers ≤ N_optimal from phase 1 ──────────────────
   if (phase === 2 && totalCap > 0) {
     const allVars: string[] = [];
     FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => allVars.push(varFT(s, p, b)))));
-    PT_STARTS .forEach((s) => MON_FRI.forEach((p) => allVars.push(varPT(s, p))));
-    WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => allVars.push(varWFT(s, b))));
-    PT_STARTS .forEach((s) => allVars.push(varWPT(s)));
+    if (!fixPT)  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => allVars.push(varPT(s, p))));
+    if (!fixWk)  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => allVars.push(varWFT(s, b))));
+    if (!fixWPT) PT_STARTS .forEach((s) => allVars.push(varWPT(s)));
     conCount++;
     lines.push(` c${conCount}: ${allVars.join(" + ")} <= ${totalCap}`);
   }
 
   // ── Bounds ─────────────────────────────────────────────────────────────────
+  // Variables capped at zero get  0 <= x <= 0  (fixed at 0).
+  // All others get  0 <= x  (non-negative, unbounded above).
   lines.push("");
   lines.push("Bounds");
   FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => lines.push(` 0 <= ${varFT(s, p, b)}`))));
-  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => lines.push(` 0 <= ${varPT(s, p)}`)));
-  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => lines.push(` 0 <= ${varWFT(s, b)}`)));
-  PT_STARTS .forEach((s) => lines.push(` 0 <= ${varWPT(s)}`));
+  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => lines.push(fixPT  ? ` 0 <= ${varPT(s, p)} <= 0`  : ` 0 <= ${varPT(s, p)}`)));
+  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => lines.push(fixWk  ? ` 0 <= ${varWFT(s, b)} <= 0` : ` 0 <= ${varWFT(s, b)}`)));
+  PT_STARTS .forEach((s) => lines.push(fixWPT ? ` 0 <= ${varWPT(s)} <= 0`  : ` 0 <= ${varWPT(s)}`));
 
   // ── General (integer) ──────────────────────────────────────────────────────
   lines.push("");
