@@ -12,6 +12,8 @@ export interface OptimizerConfig {
   partTimerCapPct: number;
   /** Max weekender workers as % of total (default 30) */
   weekenderCapPct: number;
+  /** When true, FT/PT workers may have their day-off on Sat or Sun */
+  allowWeekendDayOff: boolean;
 }
 
 export interface WorkerSlot {

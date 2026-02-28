@@ -41,6 +41,7 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
     productivityRate: 12,
     partTimerCapPct: 40,
     weekenderCapPct: 30,
+    allowWeekendDayOff: false,
   });
 
   // Raw string state so users can freely type without the field snapping
@@ -131,6 +132,24 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
               max={100}
               onChange={(v) => handleChange("weekenderCapPct", v, 0, 100)}
             />
+            <div className="md:col-span-3 flex items-start gap-3 pt-2 border-t">
+              <input
+                type="checkbox"
+                id="allowWeekendDayOff"
+                checked={config.allowWeekendDayOff}
+                onChange={(e) => setConfig((prev) => ({ ...prev, allowWeekendDayOff: e.target.checked }))}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 accent-blue-600"
+              />
+              <div>
+                <Label htmlFor="allowWeekendDayOff" className="text-sm font-medium cursor-pointer">
+                  Allow weekend day-offs for FT / PT workers
+                </Label>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  When enabled, FT and PT workers may take their day-off on Saturday or Sunday.
+                  Gives the solver flexibility to reduce weekend over-staffing.
+                </p>
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -142,8 +161,8 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <ShiftRule type="FT" label="Full-time" hours="9h slot, 8h productive" starts="05:00–15:00 or 20:00–23:00 (overnight)" off="One weekday off (Mon–Fri)" />
-            <ShiftRule type="PT" label="Part-time" hours="4h straight, no break" starts="05:00 – 20:00" off="One weekday off (Mon–Fri)" />
+            <ShiftRule type="FT" label="Full-time" hours="9h slot, 8h productive" starts="05:00–15:00 or 20:00–23:00 (overnight)" off={config.allowWeekendDayOff ? "One day off (any day)" : "One weekday off (Mon–Fri)"} />
+            <ShiftRule type="PT" label="Part-time" hours="4h straight, no break" starts="05:00 – 20:00" off={config.allowWeekendDayOff ? "One day off (any day)" : "One weekday off (Mon–Fri)"} />
             <ShiftRule type="WFT" label="Weekend FT" hours="9h slot, 8h productive" starts="05:00 – 15:00" off="Mon–Fri (always off)" />
             <ShiftRule type="WPT" label="Weekend PT" hours="4h straight, no break" starts="05:00 – 20:00" off="Mon–Fri (always off)" />
           </div>

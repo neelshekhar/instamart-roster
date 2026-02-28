@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import type { SolverInput, SolverResult, WorkerSlot } from "../types";
+import type { SolverInput, SolverResult, WorkerSlot, DayIndex } from "../types";
 
 // ─── Shift definitions ────────────────────────────────────────────────────────
 //
@@ -117,6 +117,7 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   const usePT  = capPt > 0;                // include xPT vars
   const useWFT = capWk > 0;                // include xWFT vars
   const useWPT = capPt > 0 && capWk > 0;  // include xWPT vars (both caps must be > 0)
+  const DAY_OFF_DAYS = config.allowWeekendDayOff ? ALL_DAYS : MON_FRI;
 
   // Pre-filter: only keep variables that cover ≥1 demand slot.
   // This keeps the LP string small enough for the HiGHS WASM LP parser.
@@ -125,12 +126,12 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   interface WFTVar { s: number; b: number }
 
   const ftVars: FTVar[] = [];
-  FT_STARTS.forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => {
+  FT_STARTS.forEach((s) => DAY_OFF_DAYS.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => {
     if (isActiveFT(oph, s, p, b)) ftVars.push({ s, p, b });
   })));
 
   const ptVars: PTVar[] = [];
-  if (usePT) PT_STARTS.forEach((s) => MON_FRI.forEach((p) => {
+  if (usePT) PT_STARTS.forEach((s) => DAY_OFF_DAYS.forEach((p) => {
     if (isActivePT(oph, s, p)) ptVars.push({ s, p });
   }));
 
@@ -277,7 +278,8 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
 
 function buildRoster(
   solution: Record<string, number>,
-  oph: number[][]
+  oph: number[][],
+  dayOffDays: number[]
 ): {
   workers: WorkerSlot[];
   coverage: number[][];
@@ -291,14 +293,14 @@ function buildRoster(
   let ftCount = 0, ptCount = 0, wftCount = 0, wptCount = 0;
 
   FT_STARTS.forEach((s) => {
-    MON_FRI.forEach((p) => {
+    dayOffDays.forEach((p) => {
       FT_BREAK_OFFSETS.forEach((b) => {
         const count = Math.round(solution[varFT(s, p, b)] ?? 0);
         for (let i = 0; i < count; i++) {
           workers.push({
             id: id++, type: "FT",
             shiftStart: s, shiftEnd: s + 9,
-            dayOff: p as 0|1|2|3|4,
+            dayOff: p as DayIndex,
             // Store mod-24 hours for display. For overnight (s ≥ 20), hours
             // that wrapped past midnight appear as 0–7; coverage logic below
             // uses shiftStart to distinguish same-day vs next-day.
@@ -311,10 +313,10 @@ function buildRoster(
   });
 
   PT_STARTS.forEach((s) => {
-    MON_FRI.forEach((p) => {
+    dayOffDays.forEach((p) => {
       const count = Math.round(solution[varPT(s, p)] ?? 0);
       for (let i = 0; i < count; i++) {
-        workers.push({ id: id++, type: "PT", shiftStart: s, shiftEnd: s + 4, dayOff: p as 0|1|2|3|4, productiveHours: ptHours(s) });
+        workers.push({ id: id++, type: "PT", shiftStart: s, shiftEnd: s + 4, dayOff: p as DayIndex, productiveHours: ptHours(s) });
         ptCount++;
       }
     });
@@ -442,8 +444,9 @@ self.onmessage = async (e: MessageEvent) => {
       solution[name] = col.Primal;
     }
 
+    const dayOffDays = input.config.allowWeekendDayOff ? ALL_DAYS : MON_FRI;
     const { workers, coverage, ftCount, ptCount, wftCount, wptCount } =
-      buildRoster(solution, input.oph);
+      buildRoster(solution, input.oph, dayOffDays);
 
     const rate = input.config.productivityRate;
     const reqMatrix: number[][] = input.oph.map((row) =>
