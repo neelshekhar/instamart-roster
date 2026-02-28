@@ -51,7 +51,7 @@ export function ResultsSummary({ result }: ResultsSummaryProps) {
   const coveragePct = totalSlots > 0 ? Math.round((coveredSlots / totalSlots) * 100) : 100;
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
 
       {/* 1 — Headcount */}
       <Card>
@@ -79,7 +79,7 @@ export function ResultsSummary({ result }: ResultsSummaryProps) {
       </Card>
 
       {/* 2 — Worker mix */}
-      <Card className="md:col-span-2">
+      <Card>
         <CardHeader className="pb-1">
           <CardTitle className="text-sm font-medium text-gray-500">Worker Mix</CardTitle>
         </CardHeader>
