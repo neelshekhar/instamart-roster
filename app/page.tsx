@@ -4,19 +4,26 @@ import { useState, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { FileUpload } from "@/components/FileUpload";
+import { DemandEditor } from "@/components/DemandEditor";
 import { ConfigPanel } from "@/components/ConfigPanel";
 import { ResultsSummary } from "@/components/ResultsSummary";
 import { RosterTable } from "@/components/RosterTable";
 import { CoverageChart } from "@/components/CoverageChart";
 import { UtilizationHeatmap } from "@/components/UtilizationHeatmap";
+import { WeeklyOverviewChart } from "@/components/WeeklyOverviewChart";
 import { runOptimizer } from "@/lib/optimizer";
 import type { OphMatrix, OptimizerConfig, SolverResult } from "@/lib/types";
 
 type Step = "upload" | "configure" | "results";
+type InputTab = "upload" | "manual";
+
+const EMPTY_OPH: OphMatrix = Array.from({ length: 7 }, () => new Array(24).fill(0));
 
 export default function Home() {
   const [step, setStep] = useState<Step>("upload");
+  const [inputTab, setInputTab] = useState<InputTab>("upload");
   const [oph, setOph] = useState<OphMatrix | null>(null);
+  const [editOph, setEditOph] = useState<OphMatrix>(EMPTY_OPH);
   const [result, setResult] = useState<SolverResult | null>(null);
   const [config, setConfig] = useState<OptimizerConfig | null>(null);
   const [solving, setSolving] = useState(false);
@@ -25,6 +32,7 @@ export default function Home() {
 
   const handleMatrixReady = useCallback((matrix: OphMatrix) => {
     setOph(matrix);
+    setEditOph(matrix); // keep manual editor in sync
     setStep("configure");
     setResult(null);
     setError(null);
@@ -95,7 +103,42 @@ export default function Home() {
       <main className="max-w-5xl mx-auto px-4 py-8">
         {/* Step 1: Upload */}
         {step === "upload" && (
-          <FileUpload onMatrixReady={handleMatrixReady} />
+          <div className="space-y-4">
+            {/* Input mode tabs */}
+            <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+              <button
+                onClick={() => setInputTab("upload")}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  inputTab === "upload"
+                    ? "bg-white text-blue-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Upload File
+              </button>
+              <button
+                onClick={() => setInputTab("manual")}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  inputTab === "manual"
+                    ? "bg-white text-blue-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Edit Manually
+              </button>
+            </div>
+
+            {inputTab === "upload" && (
+              <FileUpload onMatrixReady={handleMatrixReady} />
+            )}
+            {inputTab === "manual" && (
+              <DemandEditor
+                oph={editOph}
+                onChange={setEditOph}
+                onProceed={() => handleMatrixReady(editOph)}
+              />
+            )}
+          </div>
         )}
 
         {/* Step 2: Configure & Solve */}
@@ -145,12 +188,16 @@ export default function Home() {
 
             <ResultsSummary result={result} />
 
-            <Tabs defaultValue="heatmap">
+            <Tabs defaultValue="overview">
               <TabsList>
+                <TabsTrigger value="overview">Weekly Overview</TabsTrigger>
                 <TabsTrigger value="heatmap">Utilization Heatmap</TabsTrigger>
                 <TabsTrigger value="chart">Coverage Chart</TabsTrigger>
                 <TabsTrigger value="roster">Roster Table</TabsTrigger>
               </TabsList>
+              <TabsContent value="overview" className="mt-4">
+                <WeeklyOverviewChart result={result} />
+              </TabsContent>
               <TabsContent value="heatmap" className="mt-4">
                 <UtilizationHeatmap result={result} />
               </TabsContent>
