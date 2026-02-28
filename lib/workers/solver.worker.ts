@@ -63,21 +63,23 @@ function buildLP(input: SolverInput): string {
 
   const lines: string[] = [];
 
-  // ── Objective: minimize total weekly paid labor-hours ──────────────────────
-  // Weights = weekly paid hours per worker (includes break time, same as payroll).
-  //   FT  : 9h/day × 6 days = 54h
-  //   PT  : 4h/day × 6 days = 24h
-  //   WFT : 9h/day × 2 days = 18h
-  //   WPT : 4h/day × 2 days =  8h
-  //
-  // This causes the solver to prefer PT over FT for narrow demand windows
-  // (PT costs 24h vs FT 54h), naturally reducing idle time in demand valleys.
+  // ── Objective: minimize total weekly paid labor-hours (normalised to FT=1) ──
+  // Raw weekly paid hours: FT=54h, PT=24h, WFT=18h, WPT=8h.
+  // Normalised so FT=1.0 (keeps objective values in the same 0-200 range as
+  // the old headcount objective, avoiding HiGHS WASM numerical overflow with
+  // large integer coefficients like 54).
+  // This incentivises the solver to prefer PT for narrow demand windows
+  // (PT costs 0.4444 vs FT 1.0), reducing idle time in demand valleys.
+  const W_FT  = (54 / 54).toFixed(4); // "1.0000"
+  const W_PT  = (24 / 54).toFixed(4); // "0.4444"
+  const W_WFT = (18 / 54).toFixed(4); // "0.3333"
+  const W_WPT = ( 8 / 54).toFixed(4); // "0.1481"
   lines.push("Minimize");
   const objTerms: string[] = [];
-  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`54 ${varFT(s, p, b)}`))));
-  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(`24 ${varPT(s, p)}`)));
-  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`18 ${varWFT(s, b)}`)));
-  PT_STARTS .forEach((s) => objTerms.push(`8 ${varWPT(s)}`));
+  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`${W_FT} ${varFT(s, p, b)}`))));
+  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(`${W_PT} ${varPT(s, p)}`)));
+  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`${W_WFT} ${varWFT(s, b)}`)));
+  PT_STARTS .forEach((s) => objTerms.push(`${W_WPT} ${varWPT(s)}`));
   lines.push(" obj: " + objTerms.join(" + "));
 
   lines.push("");
