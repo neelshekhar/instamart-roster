@@ -1,6 +1,5 @@
 "use client";
 
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import type { SolverResult } from "@/lib/types";
@@ -51,13 +50,6 @@ export function ResultsSummary({ result }: ResultsSummaryProps) {
   }
   const coveragePct = totalSlots > 0 ? Math.round((coveredSlots / totalSlots) * 100) : 100;
 
-  const mixData = [
-    { name: "FT",  value: ftCount,  color: "#3b82f6" },
-    { name: "PT",  value: ptCount,  color: "#10b981" },
-    { name: "WFT", value: wftCount, color: "#8b5cf6" },
-    { name: "WPT", value: wptCount, color: "#f97316" },
-  ].filter((d) => d.value > 0);
-
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
 
@@ -86,36 +78,13 @@ export function ResultsSummary({ result }: ResultsSummaryProps) {
         </CardContent>
       </Card>
 
-      {/* 2 — Worker mix with pie chart */}
+      {/* 2 — Worker mix */}
       <Card className="md:col-span-2">
         <CardHeader className="pb-1">
           <CardTitle className="text-sm font-medium text-gray-500">Worker Mix</CardTitle>
         </CardHeader>
-        <CardContent className="flex items-center gap-4">
-          <div className="w-24 h-24 flex-shrink-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={mixData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={22}
-                  outerRadius={40}
-                  paddingAngle={2}
-                  dataKey="value"
-                >
-                  {mixData.map((entry, index) => (
-                    <Cell key={index} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{ fontSize: 11 }}
-                  formatter={(value: number | undefined, name: string | undefined) => [`${value ?? 0} workers`, name ?? ""]}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="space-y-1.5 text-sm flex-1">
+        <CardContent>
+          <div className="space-y-1.5 text-sm">
             <MixRow label="FT"  count={ftCount}  total={totalWorkers} color="bg-blue-500" />
             <MixRow label="PT"  count={ptCount}  total={totalWorkers} color="bg-green-500" />
             <MixRow label="WFT" count={wftCount} total={totalWorkers} color="bg-purple-500" />
