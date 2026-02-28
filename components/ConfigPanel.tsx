@@ -138,7 +138,7 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <ShiftRule type="FT" label="Full-time" hours="9h slot, 8h productive" starts="05:00 – 15:00" off="One weekday off (Mon–Fri)" />
+            <ShiftRule type="FT" label="Full-time" hours="9h slot, 8h productive" starts="05:00–15:00 or 20:00–23:00 (overnight)" off="One weekday off (Mon–Fri)" />
             <ShiftRule type="PT" label="Part-time" hours="4h straight, no break" starts="05:00 – 20:00" off="One weekday off (Mon–Fri)" />
             <ShiftRule type="WFT" label="Weekend FT" hours="9h slot, 8h productive" starts="05:00 – 15:00" off="Mon–Fri (always off)" />
             <ShiftRule type="WPT" label="Weekend PT" hours="4h straight, no break" starts="05:00 – 20:00" off="Mon–Fri (always off)" />

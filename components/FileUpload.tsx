@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { parseFile, generateSampleMatrix, matrixToCsv } from "@/lib/parser";
+import { parseFile, generateSampleMatrix, getDefaultMatrix, matrixToCsv } from "@/lib/parser";
 import type { OphMatrix } from "@/lib/types";
 
 interface FileUploadProps {
@@ -16,8 +16,8 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
 export function FileUpload({ onMatrixReady }: FileUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [matrix, setMatrix] = useState<OphMatrix | null>(null);
+  const [fileName, setFileName] = useState<string>("sample-oph-matrix.csv");
+  const [matrix, setMatrix] = useState<OphMatrix>(() => getDefaultMatrix());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 

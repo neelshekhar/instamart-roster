@@ -64,6 +64,22 @@ function extractMatrix(rows: (string | number | undefined)[][]): OphMatrix {
 }
 
 /**
+ * Default 7×24 OPH matrix from sample-oph-matrix.csv.
+ * Rows: Mon–Sun. Columns: hours 0–23.
+ */
+export function getDefaultMatrix(): OphMatrix {
+  return [
+    [20,20,20,20,20,40,50,80,80,80,60,40,30,30,20,20,30,40,60,80,90,90,20,10], // Mon
+    [20,20,20,20,20,40,50,80,80,80,60,40,30,30,20,20,30,40,60,80,90,90,20,10], // Tue
+    [20,20,20,20,20,40,50,80,80,80,60,40,30,30,20,20,30,40,60,80,90,90,20,10], // Wed
+    [20,20,20,20,20,40,50,80,80,80,60,40,30,30,20,20,30,40,60,80,90,90,20,10], // Thu
+    [20,20,20,20,20,40,50,80,80,80,60,40,30,30,20,20,30,40,60,80,90,90,20,10], // Fri
+    [20,20,20,20,20,40,50,80,80,80,60,40,30,30,20,20,30,40,90,90,90,90,90,10], // Sat
+    [20,20,20,20,20,40,50,80,80,80,60,40,30,30,20,20,30,40,90,90,90,90,90,10], // Sun
+  ];
+}
+
+/**
  * Generate a sample 7×24 OPH matrix for demo / testing purposes.
  */
 export function generateSampleMatrix(): OphMatrix {

@@ -2,25 +2,44 @@
 import type { SolverInput, SolverResult, WorkerSlot } from "../types";
 
 // ─── Shift definitions ────────────────────────────────────────────────────────
+//
+// Constraint: shifts must NOT start between 00:00–04:59 and must NOT end
+// between 00:00–04:59. This gives two valid windows for FT (9h):
+//   • Day shifts  : start 05–15  → end 14:00–24:00 (≤ midnight)
+//   • Overnight   : start 20–23  → end 05:00–08:00 (≥ 5 AM next day)
+//   • Forbidden   : start 16–19  → end 01:00–04:00 (violates end constraint)
+//
+// For PT (4h), a 4h window can only reach 5 AM from a start ≥ 25 (impossible).
+// So PT cannot do overnight: valid starts are 05–20 (end 09–24:00 max).
+//
+// WFT workers only work Sat+Sun. A Sunday-night overnight would bleed into
+// Monday (weekday) — invalid. So WFT stays day-only: 05–15.
 
-// Full-time: 9h shift, 8h productive.
-// Break can be taken after completing 3 hours OR after 4 hours (staggered).
-// Break offsets relative to shift start: 3 or 4.
-const FT_STARTS: number[] = Array.from({ length: 11 }, (_, i) => i + 5); // [5..15]
-const FT_BREAK_OFFSETS: number[] = [3, 4]; // break at s+3 or s+4
+const FT_STARTS: number[]  = [5,6,7,8,9,10,11,12,13,14,15, 20,21,22,23]; // day + overnight
+const PT_STARTS: number[]  = Array.from({ length: 16 }, (_, i) => i + 5); // [5..20]
+const WFT_STARTS: number[] = Array.from({ length: 11 }, (_, i) => i + 5); // [5..15] day only
 
-// Part-time: 4h straight, no break.
-const PT_STARTS: number[] = Array.from({ length: 16 }, (_, i) => i + 5); // [5..20]
+const FT_BREAK_OFFSETS: number[] = [3, 4]; // break 3 or 4 hours after shift start (staggered)
 
 const MON_FRI: number[] = [0, 1, 2, 3, 4];
 const ALL_DAYS: number[] = [0, 1, 2, 3, 4, 5, 6];
 
 /**
- * Productive hours for an FT worker given shift start s and break offset b.
- * The break hour (s+b) is excluded; all other 8 of the 9 shift hours are productive.
+ * Raw productive hours for an FT worker (shift start s, break offset b).
+ * Values ≥ 24 represent hours on the NEXT calendar day
+ * (e.g. raw hour 25 = 1 AM next day for an overnight shift starting at 20:00+).
+ * The break slot (s+b) is excluded; the other 8 of 9 shift hours are productive.
+ */
+function ftHoursRaw(s: number, b: number): number[] {
+  return Array.from({ length: 9 }, (_, i) => s + i).filter((h) => h !== s + b);
+}
+
+/**
+ * Same-day productive hours (0–23) for an FT worker.
+ * For overnight starts (s ≥ 20) this only returns the hours before midnight.
  */
 function ftHours(s: number, b: number): number[] {
-  return Array.from({ length: 9 }, (_, i) => s + i).filter((h) => h !== s + b);
+  return ftHoursRaw(s, b).filter((h) => h < 24);
 }
 
 function ptHours(s: number): number[] {
@@ -28,38 +47,29 @@ function ptHours(s: number): number[] {
 }
 
 // ─── Variable naming ──────────────────────────────────────────────────────────
-// FT/WFT now have a break-offset dimension (b = 3 or 4).
 
-function varFT(s: number, p: number, b: number): string {
-  return `xFT_${s}_${p}_${b}`;
-}
-function varPT(s: number, p: number): string {
-  return `xPT_${s}_${p}`;
-}
-function varWFT(s: number, b: number): string {
-  return `xWFT_${s}_${b}`;
-}
-function varWPT(s: number): string {
-  return `xWPT_${s}`;
-}
+function varFT(s: number, p: number, b: number): string  { return `xFT_${s}_${p}_${b}`; }
+function varPT(s: number, p: number): string             { return `xPT_${s}_${p}`; }
+function varWFT(s: number, b: number): string            { return `xWFT_${s}_${b}`; }
+function varWPT(s: number): string                       { return `xWPT_${s}`; }
 
 // ─── LP builder ──────────────────────────────────────────────────────────────
 
 function buildLP(input: SolverInput): string {
   const { oph, config } = input;
-  const rate = config.productivityRate;
+  const rate  = config.productivityRate;
   const alpha = config.partTimerCapPct / 100;
-  const beta = config.weekenderCapPct / 100;
+  const beta  = config.weekenderCapPct  / 100;
 
   const lines: string[] = [];
 
   // ── Objective: minimize total headcount ────────────────────────────────────
   lines.push("Minimize");
   const objTerms: string[] = [];
-  FT_STARTS.forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varFT(s, p, b)))));
-  PT_STARTS.forEach((s) => MON_FRI.forEach((p) => objTerms.push(varPT(s, p))));
-  FT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varWFT(s, b))));
-  PT_STARTS.forEach((s) => objTerms.push(varWPT(s)));
+  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varFT(s, p, b)))));
+  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(varPT(s, p))));
+  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varWFT(s, b))));
+  PT_STARTS .forEach((s) => objTerms.push(varWPT(s)));
   lines.push(" obj: " + objTerms.join(" + "));
 
   lines.push("");
@@ -68,8 +78,6 @@ function buildLP(input: SolverInput): string {
   let conCount = 0;
 
   // ── Coverage constraints ───────────────────────────────────────────────────
-  // For each (day, hour) with positive demand, the sum of workers covering
-  // that slot must meet the required headcount.
   for (let d = 0; d < 7; d++) {
     for (let h = 0; h < 24; h++) {
       const demand = oph[d][h];
@@ -77,7 +85,7 @@ function buildLP(input: SolverInput): string {
       const required = Math.ceil(demand / rate);
       const terms: string[] = [];
 
-      // FT workers (each break option separately)
+      // ── FT same-day: shift starts on day d and covers hour h ──────────────
       FT_STARTS.forEach((s) => {
         FT_BREAK_OFFSETS.forEach((b) => {
           if (!ftHours(s, b).includes(h)) return;
@@ -87,7 +95,23 @@ function buildLP(input: SolverInput): string {
         });
       });
 
-      // PT workers
+      // ── FT overnight: shift started on prevDay, wraps into hour h on day d ─
+      // A worker with overnight start s (≥ 20) whose PREVIOUS day is active
+      // will have their shift cover h+24 in the raw productive-hours sequence.
+      const prevDay = (d - 1 + 7) % 7;
+      FT_STARTS.filter((s) => s >= 20).forEach((s) => {
+        FT_BREAK_OFFSETS.forEach((b) => {
+          if (!ftHoursRaw(s, b).includes(h + 24)) return;
+          // Worker is active on prevDay iff prevDay ≠ their weekday off (p).
+          // Even if day d itself is their day off they still finish the
+          // overnight shift they started on prevDay.
+          MON_FRI.forEach((p) => {
+            if (prevDay !== p) terms.push(varFT(s, p, b));
+          });
+        });
+      });
+
+      // ── PT workers (no overnight) ──────────────────────────────────────────
       PT_STARTS.forEach((s) => {
         if (!ptHours(s).includes(h)) return;
         MON_FRI.forEach((p) => {
@@ -95,9 +119,9 @@ function buildLP(input: SolverInput): string {
         });
       });
 
-      // Weekend workers (Sat=5, Sun=6 only)
+      // ── Weekend workers (Sat=5, Sun=6 only, day shifts) ───────────────────
       if (d === 5 || d === 6) {
-        FT_STARTS.forEach((s) => {
+        WFT_STARTS.forEach((s) => {
           FT_BREAK_OFFSETS.forEach((b) => {
             if (ftHours(s, b).includes(h)) terms.push(varWFT(s, b));
           });
@@ -113,11 +137,11 @@ function buildLP(input: SolverInput): string {
     }
   }
 
-  // ── Helper: collect all FT vars and all PT vars (both break offsets for FT) ──
+  // ── Helper collections for cap constraints ─────────────────────────────────
   const allFTVars = (): string[] => {
     const v: string[] = [];
-    FT_STARTS.forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => v.push(varFT(s, p, b)))));
-    FT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => v.push(varWFT(s, b))));
+    FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => v.push(varFT(s, p, b)))));
+    WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => v.push(varWFT(s, b))));
     return v;
   };
   const allPTVars = (): string[] => {
@@ -128,8 +152,8 @@ function buildLP(input: SolverInput): string {
   };
   const allWkVars = (): string[] => {
     const v: string[] = [];
-    FT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => v.push(varWFT(s, b))));
-    PT_STARTS.forEach((s) => v.push(varWPT(s)));
+    WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => v.push(varWFT(s, b))));
+    PT_STARTS .forEach((s) => v.push(varWPT(s)));
     return v;
   };
   const allWdVars = (): string[] => {
@@ -174,19 +198,19 @@ function buildLP(input: SolverInput): string {
   // ── Bounds ─────────────────────────────────────────────────────────────────
   lines.push("");
   lines.push("Bounds");
-  FT_STARTS.forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => lines.push(` 0 <= ${varFT(s, p, b)}`))));
-  PT_STARTS.forEach((s) => MON_FRI.forEach((p) => lines.push(` 0 <= ${varPT(s, p)}`)));
-  FT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => lines.push(` 0 <= ${varWFT(s, b)}`)));
-  PT_STARTS.forEach((s) => lines.push(` 0 <= ${varWPT(s)}`));
+  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => lines.push(` 0 <= ${varFT(s, p, b)}`))));
+  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => lines.push(` 0 <= ${varPT(s, p)}`)));
+  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => lines.push(` 0 <= ${varWFT(s, b)}`)));
+  PT_STARTS .forEach((s) => lines.push(` 0 <= ${varWPT(s)}`));
 
   // ── General (integer) ──────────────────────────────────────────────────────
   lines.push("");
   lines.push("General");
   const generals: string[] = [];
-  FT_STARTS.forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => generals.push(varFT(s, p, b)))));
-  PT_STARTS.forEach((s) => MON_FRI.forEach((p) => generals.push(varPT(s, p))));
-  FT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => generals.push(varWFT(s, b))));
-  PT_STARTS.forEach((s) => generals.push(varWPT(s)));
+  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => generals.push(varFT(s, p, b)))));
+  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => generals.push(varPT(s, p))));
+  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => generals.push(varWFT(s, b))));
+  PT_STARTS .forEach((s) => generals.push(varWPT(s)));
   lines.push(" " + generals.join(" "));
 
   lines.push("");
@@ -220,7 +244,10 @@ function buildRoster(
             id: id++, type: "FT",
             shiftStart: s, shiftEnd: s + 9,
             dayOff: p as 0|1|2|3|4,
-            productiveHours: ftHours(s, b),
+            // Store mod-24 hours for display. For overnight (s ≥ 20), hours
+            // that wrapped past midnight appear as 0–7; coverage logic below
+            // uses shiftStart to distinguish same-day vs next-day.
+            productiveHours: ftHoursRaw(s, b).map((h) => h % 24),
           });
           ftCount++;
         }
@@ -238,7 +265,7 @@ function buildRoster(
     });
   });
 
-  FT_STARTS.forEach((s) => {
+  WFT_STARTS.forEach((s) => {
     FT_BREAK_OFFSETS.forEach((b) => {
       const count = Math.round(solution[varWFT(s, b)] ?? 0);
       for (let i = 0; i < count; i++) {
@@ -246,7 +273,7 @@ function buildRoster(
           id: id++, type: "WFT",
           shiftStart: s, shiftEnd: s + 9,
           dayOff: null,
-          productiveHours: ftHours(s, b),
+          productiveHours: ftHours(s, b), // WFT day-only: all hours < 24
         });
         wftCount++;
       }
@@ -261,14 +288,26 @@ function buildRoster(
     }
   });
 
-  // Coverage matrix
+  // ── Coverage matrix ─────────────────────────────────────────────────────────
+  // For overnight FT workers (shiftStart ≥ 20), productiveHours stored mod-24
+  // means any hour h < shiftStart belongs to the NEXT calendar day.
+  // For all other worker types, every productive hour ≥ shiftStart (same day).
   const coverage: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
   workers.forEach((w) => {
     const activeDays = (w.type === "WFT" || w.type === "WPT")
       ? [5, 6]
       : ALL_DAYS.filter((d) => d !== w.dayOff);
     activeDays.forEach((d) => {
-      w.productiveHours.forEach((h) => { if (h >= 0 && h < 24) coverage[d][h]++; });
+      w.productiveHours.forEach((h) => {
+        if (h >= 0 && h < 24) {
+          if (h < w.shiftStart) {
+            // Overnight wrap: this hour is on the next calendar day
+            coverage[(d + 1) % 7][h]++;
+          } else {
+            coverage[d][h]++;
+          }
+        }
+      });
     });
   });
 
