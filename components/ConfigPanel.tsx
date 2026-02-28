@@ -22,15 +22,18 @@ function matrixStats(oph: OphMatrix) {
   let peakHour = 0;
   let peakVal = 0;
   let activeSlots = 0;
+  const dailyTotals: number[] = Array(7).fill(0);
   for (let d = 0; d < 7; d++) {
     for (let h = 0; h < 24; h++) {
       const v = oph[d][h];
       total += v;
+      dailyTotals[d] += v;
       if (v > peakVal) { peakVal = v; peakDay = d; peakHour = h; }
       if (v > 0) activeSlots++;
     }
   }
-  return { total, peakDay, peakHour, peakVal, activeSlots };
+  const avgPerDay = Math.round(total / 7);
+  return { total, peakDay, peakHour, peakVal, activeSlots, avgPerDay };
 }
 
 export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
@@ -66,8 +69,9 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
           <CardTitle className="text-base">Demand Summary</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <StatCard label="Total Orders" value={stats.total.toLocaleString()} />
+            <StatCard label="Avg Orders / Day" value={stats.avgPerDay.toLocaleString()} />
             <StatCard label="Peak Demand" value={`${stats.peakVal} OPH`} />
             <StatCard label="Peak At" value={`${DAYS[stats.peakDay]} ${stats.peakHour}:00`} />
             <StatCard label="Active Slots" value={`${stats.activeSlots} / 168`} />
