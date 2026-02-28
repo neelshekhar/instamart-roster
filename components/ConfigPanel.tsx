@@ -38,7 +38,7 @@ function matrixStats(oph: OphMatrix) {
 
 export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
   const [config, setConfig] = useState<OptimizerConfig>({
-    productivityRate: 12,
+    productivityRate: 20,
     partTimerCapPct: 40,
     weekenderCapPct: 30,
     allowWeekendDayOff: false,
@@ -46,7 +46,7 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
 
   // Raw string state so users can freely type without the field snapping
   const [raw, setRaw] = useState({
-    productivityRate: "12",
+    productivityRate: "20",
     partTimerCapPct: "40",
     weekenderCapPct: "30",
   });
@@ -215,7 +215,7 @@ function NumberField({ label, description, value, unit, hint, min, max, onChange
   return (
     <div className="space-y-2">
       <Label className="text-sm font-medium">{label}</Label>
-      <p className="text-xs text-gray-500">{description}</p>
+      <p className="text-xs text-gray-500 min-h-[2.5rem]">{description}</p>
       <div className="flex items-center gap-2">
         <Input
           type="number"
