@@ -19,55 +19,39 @@ const FT_STARTS: number[]  = [5,6,7,8,9,10,11,12,13,14,15, 20,21,22,23]; // day 
 const PT_STARTS: number[]  = Array.from({ length: 16 }, (_, i) => i + 5); // [5..20]
 const WFT_STARTS: number[] = Array.from({ length: 11 }, (_, i) => i + 5); // [5..15] day only
 
+const FT_BREAK_OFFSETS: number[] = [3, 4]; // break 3 or 4 hours after shift start (staggered)
+
 const MON_FRI: number[] = [0, 1, 2, 3, 4];
 const ALL_DAYS: number[] = [0, 1, 2, 3, 4, 5, 6];
 
 /**
- * All 9 raw shift hours for a 9-hour worker starting at s.
+ * Raw productive hours for an FT worker (shift start s, break offset b).
  * Values ≥ 24 represent hours on the NEXT calendar day
- * (e.g. raw 25 = 1 AM next day for an overnight shift starting at 20:00).
+ * (e.g. raw hour 25 = 1 AM next day for an overnight shift starting at 20:00+).
+ * The break slot (s+b) is excluded; the other 8 of 9 shift hours are productive.
  */
-function raw9(s: number): number[] {
-  return Array.from({ length: 9 }, (_, i) => s + i);
+function ftHoursRaw(s: number, b: number): number[] {
+  return Array.from({ length: 9 }, (_, i) => s + i).filter((h) => h !== s + b);
+}
+
+/**
+ * Same-day productive hours (0–23) for an FT worker.
+ * For overnight starts (s ≥ 20) this only returns the hours before midnight.
+ */
+function ftHours(s: number, b: number): number[] {
+  return ftHoursRaw(s, b).filter((h) => h < 24);
 }
 
 function ptHours(s: number): number[] {
   return [s, s + 1, s + 2, s + 3];
 }
 
-/**
- * Peak-protected smearing coefficient for a 9-hour shift worker.
- *
- * The 1-hour break is NOT taken during the 3 highest-demand hours in the
- * shift window.  Instead it is distributed equally across the remaining 6
- * hours, contributing 5/6 ≈ 0.8333 effective capacity per hour there.
- *
- * Returns 1.0 for the top-3 demand hours (worker fully productive).
- * Returns 5/6 for the other 6 hours (break smeared in).
- *
- * @param oph      demand matrix [7 days][24 hours]
- * @param s        shift start (raw hour 0–23)
- * @param shiftDay calendar day this shift STARTED (0–6)
- * @param rawH     raw hour being evaluated (s ≤ rawH ≤ s+8)
- */
-function smearedCoeff(oph: number[][], s: number, shiftDay: number, rawH: number): number {
-  const hours = raw9(s);
-  const demands = hours.map((rh) => {
-    const day = rh < 24 ? shiftDay : (shiftDay + 1) % 7;
-    return oph[day][rh % 24];
-  });
-  const indexed = demands.map((d, i) => ({ i, d })).sort((a, b) => b.d - a.d);
-  const top3 = new Set(indexed.slice(0, 3).map((x) => x.i));
-  const rawIdx = hours.indexOf(rawH);
-  return top3.has(rawIdx) ? 1.0 : 5 / 6;
-}
-
 // ─── Variable naming ──────────────────────────────────────────────────────────
 
-function varFT(s: number, p: number): string  { return `xFT_${s}_${p}`; }
-function varPT(s: number, p: number): string  { return `xPT_${s}_${p}`; }
-function varWFT(s: number): string            { return `xWFT_${s}`; }
-function varWPT(s: number): string            { return `xWPT_${s}`; }
+function varFT(s: number, p: number, b: number): string  { return `xFT_${s}_${p}_${b}`; }
+function varPT(s: number, p: number): string             { return `xPT_${s}_${p}`; }
+function varWFT(s: number, b: number): string            { return `xWFT_${s}_${b}`; }
+function varWPT(s: number): string                       { return `xWPT_${s}`; }
 
 // ─── Variable pre-filtering ────────────────────────────────────────────────────
 //
@@ -77,15 +61,15 @@ function varWPT(s: number): string            { return `xWPT_${s}`; }
 // a smaller LP string — preventing HiGHS WASM LP-parser buffer overflows that
 // manifest as "function signature mismatch" / "memory access out of bounds".
 
-function isActiveFT(oph: number[][], s: number, p: number): boolean {
-  const sameDayRaw = raw9(s).filter((rh) => rh < 24);
-  const nextDayRaw = raw9(s).filter((rh) => rh >= 24).map((rh) => rh - 24);
+function isActiveFT(oph: number[][], s: number, p: number, b: number): boolean {
+  const sameDayHrs = ftHours(s, b);
+  const nextDayHrs = ftHoursRaw(s, b).filter((h) => h >= 24).map((h) => h - 24);
   for (const d of ALL_DAYS) {
-    if (d === p) continue;
-    if (sameDayRaw.some((h) => oph[d][h] > 0)) return true;
-    if (nextDayRaw.length > 0) {
+    if (d === p) continue; // day off
+    if (sameDayHrs.some((h) => oph[d][h] > 0)) return true;
+    if (nextDayHrs.length > 0) {
       const nd = (d + 1) % 7;
-      if (nextDayRaw.some((h) => oph[nd][h] > 0)) return true;
+      if (nextDayHrs.some((h) => oph[nd][h] > 0)) return true;
     }
   }
   return false;
@@ -96,8 +80,8 @@ function isActivePT(oph: number[][], s: number, p: number): boolean {
   return ALL_DAYS.filter((d) => d !== p).some((d) => hrs.some((h) => oph[d][h] > 0));
 }
 
-function isActiveWFT(oph: number[][], s: number): boolean {
-  return raw9(s).some((rh) => rh < 24 && [5, 6].some((d) => oph[d][rh] > 0));
+function isActiveWFT(oph: number[][], s: number, b: number): boolean {
+  return ftHours(s, b).some((h) => [5, 6].some((d) => oph[d][h] > 0));
 }
 
 function isActiveWPT(oph: number[][], s: number): boolean {
@@ -110,16 +94,13 @@ function isActiveWPT(oph: number[][], s: number): boolean {
 // (any value other than 1) — both large integers (54/24) and small ones (2/1)
 // trigger Aborted() / memory faults in the WASM binary.
 //
-// Workaround: two-phase approach, both phases use only coefficient = 1 in the
-// objective. Fractional coefficients appear only in coverage constraints via the
-// peak-protected smearing model (safe for HiGHS constraint rows).
-//
+// Workaround: two-phase approach, both phases use only coefficient = 1.
 //   Phase 1 → minimise total headcount (all-1 objective).
 //   Phase 2 → add "total ≤ N_opt" and minimise FT + WFT only (PT/WPT vars
 //             absent from objective).  Solver fills remaining budget with
 //             part-timers to meet coverage, effectively maximising PT usage.
 //
-// phase    : 1 = headcount; 2 = min-FT given total cap
+// phase  : 1 = headcount; 2 = min-FT given total cap
 // totalCap : only used in phase 2; equals N_opt from phase 1
 //
 function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
@@ -129,22 +110,25 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   // ── Active variable types ──────────────────────────────────────────────────
   // When a cap is 0 its variable type is completely excluded from the LP —
   // no objective terms, no constraint terms, no bounds, no General entries.
+  // This is the only reliable way to avoid HiGHS WASM LP-parser buffer
+  // overflows (which fire when many zero-fix lines appear in any section).
   const capPt = Math.round(config.partTimerCapPct);
   const capWk = Math.round(config.weekenderCapPct);
-  const usePT  = capPt > 0;
-  const useWFT = capWk > 0;
-  const useWPT = capPt > 0 && capWk > 0;
+  const usePT  = capPt > 0;                // include xPT vars
+  const useWFT = capWk > 0;                // include xWFT vars
+  const useWPT = capPt > 0 && capWk > 0;  // include xWPT vars (both caps must be > 0)
   const DAY_OFF_DAYS = config.allowWeekendDayOff ? ALL_DAYS : MON_FRI;
 
   // Pre-filter: only keep variables that cover ≥1 demand slot.
-  interface FTVar  { s: number; p: number }
-  interface PTVar  { s: number; p: number }
-  interface WFTVar { s: number }
+  // This keeps the LP string small enough for the HiGHS WASM LP parser.
+  interface FTVar { s: number; p: number; b: number }
+  interface PTVar { s: number; p: number }
+  interface WFTVar { s: number; b: number }
 
   const ftVars: FTVar[] = [];
-  FT_STARTS.forEach((s) => DAY_OFF_DAYS.forEach((p) => {
-    if (isActiveFT(oph, s, p)) ftVars.push({ s, p });
-  }));
+  FT_STARTS.forEach((s) => DAY_OFF_DAYS.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => {
+    if (isActiveFT(oph, s, p, b)) ftVars.push({ s, p, b });
+  })));
 
   const ptVars: PTVar[] = [];
   if (usePT) PT_STARTS.forEach((s) => DAY_OFF_DAYS.forEach((p) => {
@@ -152,9 +136,9 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   }));
 
   const wftVars: WFTVar[] = [];
-  if (useWFT) WFT_STARTS.forEach((s) => {
-    if (isActiveWFT(oph, s)) wftVars.push({ s });
-  });
+  if (useWFT) WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => {
+    if (isActiveWFT(oph, s, b)) wftVars.push({ s, b });
+  }));
 
   const wptStarts: number[] = [];
   if (useWPT) PT_STARTS.forEach((s) => {
@@ -168,14 +152,14 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   const objTerms: string[] = [];
   if (phase === 1) {
     // Phase 1: minimise total headcount (all active vars get coefficient 1)
-    ftVars .forEach(({ s, p }) => objTerms.push(varFT(s, p)));
-    ptVars .forEach(({ s, p }) => objTerms.push(varPT(s, p)));
-    wftVars.forEach(({ s })    => objTerms.push(varWFT(s)));
-    wptStarts.forEach((s)      => objTerms.push(varWPT(s)));
+    ftVars .forEach(({ s, p, b }) => objTerms.push(varFT(s, p, b)));
+    ptVars .forEach(({ s, p })    => objTerms.push(varPT(s, p)));
+    wftVars.forEach(({ s, b })    => objTerms.push(varWFT(s, b)));
+    wptStarts.forEach((s)         => objTerms.push(varWPT(s)));
   } else {
     // Phase 2: minimise FT + WFT only (PT/WPT are free → solver prefers them)
-    ftVars .forEach(({ s, p }) => objTerms.push(varFT(s, p)));
-    wftVars.forEach(({ s })    => objTerms.push(varWFT(s)));
+    ftVars .forEach(({ s, p, b }) => objTerms.push(varFT(s, p, b)));
+    wftVars.forEach(({ s, b })    => objTerms.push(varWFT(s, b)));
   }
   lines.push(" obj: " + objTerms.join(" + "));
 
@@ -184,7 +168,7 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
 
   let conCount = 0;
 
-  // ── Coverage constraints (peak-protected smearing for 9h workers) ──────────
+  // ── Coverage constraints ───────────────────────────────────────────────────
   for (let d = 0; d < 7; d++) {
     for (let h = 0; h < 24; h++) {
       const demand = oph[d][h];
@@ -192,39 +176,29 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
       const required = Math.ceil(demand / rate);
       const terms: string[] = [];
 
-      // FT same-day — top-3 demand hours in shift window → 1.0, rest → 5/6
-      ftVars.forEach(({ s, p }) => {
-        if (d === p) return;
-        const sameDayRaw = raw9(s).filter((rh) => rh < 24);
-        if (!sameDayRaw.includes(h)) return;
-        const coeff = smearedCoeff(oph, s, d, h);
-        terms.push(`${coeff.toFixed(8)} ${varFT(s, p)}`);
+      // FT same-day
+      ftVars.forEach(({ s, p, b }) => {
+        if (d !== p && ftHours(s, b).includes(h)) terms.push(varFT(s, p, b));
       });
 
       // FT overnight: shift started on prevDay, wraps into hour h on day d
       const prevDay = (d - 1 + 7) % 7;
-      ftVars.forEach(({ s, p }) => {
+      ftVars.forEach(({ s, p, b }) => {
         if (s < 20) return; // only overnight starts
         if (p === prevDay) return; // day off is the shift day
-        if (!raw9(s).includes(h + 24)) return;
-        const coeff = smearedCoeff(oph, s, prevDay, h + 24);
-        terms.push(`${coeff.toFixed(8)} ${varFT(s, p)}`);
+        if (ftHoursRaw(s, b).includes(h + 24)) terms.push(varFT(s, p, b));
       });
 
-      // PT — no break in a 4h shift, coefficient always 1
+      // PT (no overnight)
       ptVars.forEach(({ s, p }) => {
         if (d !== p && ptHours(s).includes(h)) terms.push(varPT(s, p));
       });
 
       // Weekend workers (Sat=5, Sun=6 only)
       if (d === 5 || d === 6) {
-        // WFT with smearing (day-only: all raw hours < 24)
-        wftVars.forEach(({ s }) => {
-          if (!raw9(s).includes(h)) return; // WFT day-only, so h is already raw
-          const coeff = smearedCoeff(oph, s, d, h);
-          terms.push(`${coeff.toFixed(8)} ${varWFT(s)}`);
+        wftVars.forEach(({ s, b }) => {
+          if (ftHours(s, b).includes(h)) terms.push(varWFT(s, b));
         });
-        // WPT — no smearing
         wptStarts.forEach((s) => {
           if (ptHours(s).includes(h)) terms.push(varWPT(s));
         });
@@ -244,8 +218,8 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
     const ptV = ptVars.map(({ s, p }) => varPT(s, p));
     wptStarts.forEach((s) => ptV.push(varWPT(s)));
 
-    const ftV = ftVars.map(({ s, p }) => varFT(s, p));
-    wftVars.forEach(({ s }) => ftV.push(varWFT(s)));
+    const ftV = ftVars.map(({ s, p, b }) => varFT(s, p, b));
+    wftVars.forEach(({ s, b }) => ftV.push(varWFT(s, b)));
 
     const lhs = ptV.map((v) => `${100 - capPt} ${v}`).join(" + ")
       + " - " + ftV.map((v) => `${capPt} ${v}`).join(" - ");
@@ -255,10 +229,10 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
 
   if ((useWFT || useWPT) && capWk < 100) {
     // Weekender-cap: (100-capWk)(WFT+WPT) - capWk(FT+PT) ≤ 0
-    const wkV = wftVars.map(({ s }) => varWFT(s));
+    const wkV = wftVars.map(({ s, b }) => varWFT(s, b));
     wptStarts.forEach((s) => wkV.push(varWPT(s)));
 
-    const wdV = ftVars.map(({ s, p }) => varFT(s, p));
+    const wdV = ftVars.map(({ s, p, b }) => varFT(s, p, b));
     ptVars.forEach(({ s, p }) => wdV.push(varPT(s, p)));
 
     const lhs = wkV.map((v) => `${100 - capWk} ${v}`).join(" + ")
@@ -269,9 +243,9 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
 
   // ── Phase 2 only: total active workers ≤ N_optimal from phase 1 ───────────
   if (phase === 2 && totalCap > 0) {
-    const allV = ftVars.map(({ s, p }) => varFT(s, p));
+    const allV = ftVars.map(({ s, p, b }) => varFT(s, p, b));
     ptVars .forEach(({ s, p }) => allV.push(varPT(s, p)));
-    wftVars.forEach(({ s })    => allV.push(varWFT(s)));
+    wftVars.forEach(({ s, b }) => allV.push(varWFT(s, b)));
     wptStarts.forEach((s)      => allV.push(varWPT(s)));
     conCount++;
     lines.push(` c${conCount}: ${allV.join(" + ")} <= ${totalCap}`);
@@ -280,19 +254,19 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   // ── Bounds (only active, demand-covering variables) ────────────────────────
   lines.push("");
   lines.push("Bounds");
-  ftVars .forEach(({ s, p }) => lines.push(` 0 <= ${varFT(s, p)}`));
-  ptVars .forEach(({ s, p }) => lines.push(` 0 <= ${varPT(s, p)}`));
-  wftVars.forEach(({ s })    => lines.push(` 0 <= ${varWFT(s)}`));
-  wptStarts.forEach((s)      => lines.push(` 0 <= ${varWPT(s)}`));
+  ftVars .forEach(({ s, p, b }) => lines.push(` 0 <= ${varFT(s, p, b)}`));
+  ptVars .forEach(({ s, p })    => lines.push(` 0 <= ${varPT(s, p)}`));
+  wftVars.forEach(({ s, b })    => lines.push(` 0 <= ${varWFT(s, b)}`));
+  wptStarts.forEach((s)         => lines.push(` 0 <= ${varWPT(s)}`));
 
   // ── General / integer declarations ────────────────────────────────────────
   lines.push("");
   lines.push("General");
   const generals: string[] = [];
-  ftVars .forEach(({ s, p }) => generals.push(varFT(s, p)));
-  ptVars .forEach(({ s, p }) => generals.push(varPT(s, p)));
-  wftVars.forEach(({ s })    => generals.push(varWFT(s)));
-  wptStarts.forEach((s)      => generals.push(varWPT(s)));
+  ftVars .forEach(({ s, p, b }) => generals.push(varFT(s, p, b)));
+  ptVars .forEach(({ s, p })    => generals.push(varPT(s, p)));
+  wftVars.forEach(({ s, b })    => generals.push(varWFT(s, b)));
+  wptStarts.forEach((s)         => generals.push(varWPT(s)));
   lines.push(" " + generals.join(" "));
 
   lines.push("");
@@ -314,25 +288,27 @@ function buildRoster(
   wftCount: number;
   wptCount: number;
 } {
-  void oph; // oph not needed for roster building (smearing is LP-only)
   const workers: WorkerSlot[] = [];
   let id = 1;
   let ftCount = 0, ptCount = 0, wftCount = 0, wptCount = 0;
 
   FT_STARTS.forEach((s) => {
     dayOffDays.forEach((p) => {
-      const count = Math.round(solution[varFT(s, p)] ?? 0);
-      for (let i = 0; i < count; i++) {
-        workers.push({
-          id: id++, type: "FT",
-          shiftStart: s, shiftEnd: s + 9,
-          dayOff: p as DayIndex,
-          // All 9 hours stored mod-24; overnight hours (raw ≥ 24) appear as
-          // 0-7 and are attributed to the next calendar day by coverage logic.
-          productiveHours: raw9(s).map((h) => h % 24),
-        });
-        ftCount++;
-      }
+      FT_BREAK_OFFSETS.forEach((b) => {
+        const count = Math.round(solution[varFT(s, p, b)] ?? 0);
+        for (let i = 0; i < count; i++) {
+          workers.push({
+            id: id++, type: "FT",
+            shiftStart: s, shiftEnd: s + 9,
+            dayOff: p as DayIndex,
+            // Store mod-24 hours for display. For overnight (s ≥ 20), hours
+            // that wrapped past midnight appear as 0–7; coverage logic below
+            // uses shiftStart to distinguish same-day vs next-day.
+            productiveHours: ftHoursRaw(s, b).map((h) => h % 24),
+          });
+          ftCount++;
+        }
+      });
     });
   });
 
@@ -347,16 +323,18 @@ function buildRoster(
   });
 
   WFT_STARTS.forEach((s) => {
-    const count = Math.round(solution[varWFT(s)] ?? 0);
-    for (let i = 0; i < count; i++) {
-      workers.push({
-        id: id++, type: "WFT",
-        shiftStart: s, shiftEnd: s + 9,
-        dayOff: null,
-        productiveHours: raw9(s), // WFT day-only: all hours < 24
-      });
-      wftCount++;
-    }
+    FT_BREAK_OFFSETS.forEach((b) => {
+      const count = Math.round(solution[varWFT(s, b)] ?? 0);
+      for (let i = 0; i < count; i++) {
+        workers.push({
+          id: id++, type: "WFT",
+          shiftStart: s, shiftEnd: s + 9,
+          dayOff: null,
+          productiveHours: ftHours(s, b), // WFT day-only: all hours < 24
+        });
+        wftCount++;
+      }
+    });
   });
 
   PT_STARTS.forEach((s) => {
