@@ -57,9 +57,7 @@ function varWPT(s: number): string                       { return `xWPT_${s}`; }
 
 function buildLP(input: SolverInput): string {
   const { oph, config } = input;
-  const rate  = config.productivityRate;
-  const alpha = config.partTimerCapPct / 100;
-  const beta  = config.weekenderCapPct  / 100;
+  const rate = config.productivityRate;
 
   const lines: string[] = [];
 
@@ -173,34 +171,44 @@ function buildLP(input: SolverInput): string {
   };
 
   // ── PT cap ─────────────────────────────────────────────────────────────────
-  if (alpha < 1) {
+  // Constraint: (PT+WPT) ≤ α × total  →  (1−α)(PT+WPT) − α(FT+WFT) ≤ 0
+  // Multiply through by 100 to use plain integers and avoid LP-parser issues
+  // with decimal coefficient strings (which corrupt HiGHS WASM memory).
+  //   capPt = round(partTimerCapPct)  →  pos coeff = 100-capPt, neg coeff = capPt
+  const capPt = Math.round(config.partTimerCapPct);
+  if (capPt < 100) {
     const ptVars = allPTVars();
-    if (alpha === 0) {
+    if (capPt === 0) {
       ptVars.forEach((v) => { conCount++; lines.push(` c${conCount}: ${v} <= 0`); });
     } else {
       const ftVars = allFTVars();
-      const terms = [
-        ...ptVars.map((v) => `${(1 - alpha).toFixed(6)} ${v}`),
-        ...ftVars.map((v) => `${(-alpha).toFixed(6)} ${v}`),
-      ];
+      const posCoeff = 100 - capPt;
+      const negCoeff = capPt;
+      const lhs =
+        ptVars.map((v) => `${posCoeff} ${v}`).join(" + ") +
+        " - " +
+        ftVars.map((v) => `${negCoeff} ${v}`).join(" - ");
       conCount++;
-      lines.push(` c${conCount}: ${terms.join(" + ")} <= 0`);
+      lines.push(` c${conCount}: ${lhs} <= 0`);
     }
   }
 
   // ── Weekender cap ──────────────────────────────────────────────────────────
-  if (beta < 1) {
+  const capWk = Math.round(config.weekenderCapPct);
+  if (capWk < 100) {
     const wkVars = allWkVars();
-    if (beta === 0) {
+    if (capWk === 0) {
       wkVars.forEach((v) => { conCount++; lines.push(` c${conCount}: ${v} <= 0`); });
     } else {
       const wdVars = allWdVars();
-      const terms = [
-        ...wkVars.map((v) => `${(1 - beta).toFixed(6)} ${v}`),
-        ...wdVars.map((v) => `${(-beta).toFixed(6)} ${v}`),
-      ];
+      const posCoeff = 100 - capWk;
+      const negCoeff = capWk;
+      const lhs =
+        wkVars.map((v) => `${posCoeff} ${v}`).join(" + ") +
+        " - " +
+        wdVars.map((v) => `${negCoeff} ${v}`).join(" - ");
       conCount++;
-      lines.push(` c${conCount}: ${terms.join(" + ")} <= 0`);
+      lines.push(` c${conCount}: ${lhs} <= 0`);
     }
   }
 
