@@ -63,13 +63,21 @@ function buildLP(input: SolverInput): string {
 
   const lines: string[] = [];
 
-  // ── Objective: minimize total headcount ────────────────────────────────────
+  // ── Objective: minimize total weekly paid labor-hours ──────────────────────
+  // Weights = weekly paid hours per worker (includes break time, same as payroll).
+  //   FT  : 9h/day × 6 days = 54h
+  //   PT  : 4h/day × 6 days = 24h
+  //   WFT : 9h/day × 2 days = 18h
+  //   WPT : 4h/day × 2 days =  8h
+  //
+  // This causes the solver to prefer PT over FT for narrow demand windows
+  // (PT costs 24h vs FT 54h), naturally reducing idle time in demand valleys.
   lines.push("Minimize");
   const objTerms: string[] = [];
-  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varFT(s, p, b)))));
-  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(varPT(s, p))));
-  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varWFT(s, b))));
-  PT_STARTS .forEach((s) => objTerms.push(varWPT(s)));
+  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`54 ${varFT(s, p, b)}`))));
+  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(`24 ${varPT(s, p)}`)));
+  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`18 ${varWFT(s, b)}`)));
+  PT_STARTS .forEach((s) => objTerms.push(`8 ${varWPT(s)}`));
   lines.push(" obj: " + objTerms.join(" + "));
 
   lines.push("");

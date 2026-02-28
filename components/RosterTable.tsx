@@ -144,7 +144,10 @@ export function RosterTable({ result, config }: RosterTableProps) {
                       {String(w.shiftStart).padStart(2, "0")}:00
                     </TableCell>
                     <TableCell className="font-mono text-sm">
-                      {String(w.shiftEnd).padStart(2, "0")}:00
+                      {w.shiftEnd > 23
+                        ? <>{String(w.shiftEnd % 24).padStart(2, "0")}:00 <span className="text-xs text-gray-400">+1d</span></>
+                        : `${String(w.shiftEnd).padStart(2, "0")}:00`
+                      }
                     </TableCell>
                     <TableCell className="text-sm">{dayOffLabel}</TableCell>
                     {DAYS.map((_, d) => {
