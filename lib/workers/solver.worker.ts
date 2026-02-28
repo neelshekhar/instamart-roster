@@ -63,23 +63,22 @@ function buildLP(input: SolverInput): string {
 
   const lines: string[] = [];
 
-  // ── Objective: minimize total weekly paid labor-hours (normalised to FT=1) ──
-  // Raw weekly paid hours: FT=54h, PT=24h, WFT=18h, WPT=8h.
-  // Normalised so FT=1.0 (keeps objective values in the same 0-200 range as
-  // the old headcount objective, avoiding HiGHS WASM numerical overflow with
-  // large integer coefficients like 54).
-  // This incentivises the solver to prefer PT for narrow demand windows
-  // (PT costs 0.4444 vs FT 1.0), reducing idle time in demand valleys.
-  const W_FT  = (54 / 54).toFixed(4); // "1.0000"
-  const W_PT  = (24 / 54).toFixed(4); // "0.4444"
-  const W_WFT = (18 / 54).toFixed(4); // "0.3333"
-  const W_WPT = ( 8 / 54).toFixed(4); // "0.1481"
+  // ── Objective: minimise total weekly labour-hours (small integer weights) ───
+  // HiGHS WASM aborts with large-integer (54/24/18/8) or decimal (0.4444…)
+  // coefficients due to internal LP-parser buffer issues.  Small plain
+  // integers stay well within the stable range (max objective ≈ 400).
+  //
+  // Weights approximate weekly paid-hour ratios (54 : 24 : 18 : 8 ≈ 2:1:1:0.5).
+  // PT costs half an FT → solver actively chooses PT for narrow demand windows
+  // instead of extending an FT shift through a demand valley.
+  //   FT  = 2   WFT = 2
+  //   PT  = 1   WPT = 1
   lines.push("Minimize");
   const objTerms: string[] = [];
-  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`${W_FT} ${varFT(s, p, b)}`))));
-  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(`${W_PT} ${varPT(s, p)}`)));
-  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`${W_WFT} ${varWFT(s, b)}`)));
-  PT_STARTS .forEach((s) => objTerms.push(`${W_WPT} ${varWPT(s)}`));
+  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`2 ${varFT(s, p, b)}`))));
+  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(`1 ${varPT(s, p)}`)));
+  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`2 ${varWFT(s, b)}`)));
+  PT_STARTS .forEach((s) => objTerms.push(`1 ${varWPT(s)}`));
   lines.push(" obj: " + objTerms.join(" + "));
 
   lines.push("");
