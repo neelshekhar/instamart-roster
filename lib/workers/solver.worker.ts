@@ -54,29 +54,39 @@ function varWFT(s: number, b: number): string            { return `xWFT_${s}_${b
 function varWPT(s: number): string                       { return `xWPT_${s}`; }
 
 // ─── LP builder ──────────────────────────────────────────────────────────────
-
-function buildLP(input: SolverInput): string {
+//
+// HiGHS WASM MIP solver crashes whenever objective coefficients are non-uniform
+// (any value other than 1) — both large integers (54/24) and small ones (2/1)
+// trigger Aborted() / memory faults in the WASM binary.
+//
+// Workaround: two-phase approach, both phases use only coefficient = 1.
+//   Phase 1 → minimise total headcount (all-1 objective).
+//   Phase 2 → add "total ≤ N_opt" and minimise FT + WFT only (PT/WPT vars
+//             absent from objective).  Solver fills remaining budget with
+//             part-timers to meet coverage, effectively maximising PT usage.
+//
+// phase  : 1 = headcount; 2 = min-FT given total cap
+// totalCap : only used in phase 2; equals N_opt from phase 1
+//
+function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   const { oph, config } = input;
   const rate = config.productivityRate;
 
   const lines: string[] = [];
 
-  // ── Objective: minimise total weekly labour-hours (small integer weights) ───
-  // HiGHS WASM aborts with large-integer (54/24/18/8) or decimal (0.4444…)
-  // coefficients due to internal LP-parser buffer issues.  Small plain
-  // integers stay well within the stable range (max objective ≈ 400).
-  //
-  // Weights approximate weekly paid-hour ratios (54 : 24 : 18 : 8 ≈ 2:1:1:0.5).
-  // PT costs half an FT → solver actively chooses PT for narrow demand windows
-  // instead of extending an FT shift through a demand valley.
-  //   FT  = 2   WFT = 2
-  //   PT  = 1   WPT = 1
   lines.push("Minimize");
   const objTerms: string[] = [];
-  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`2 ${varFT(s, p, b)}`))));
-  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(`1 ${varPT(s, p)}`)));
-  WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(`2 ${varWFT(s, b)}`)));
-  PT_STARTS .forEach((s) => objTerms.push(`1 ${varWPT(s)}`));
+  if (phase === 1) {
+    // Phase 1: minimise total headcount — all variables get coefficient 1
+    FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varFT(s, p, b)))));
+    PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(varPT(s, p))));
+    WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varWFT(s, b))));
+    PT_STARTS .forEach((s) => objTerms.push(varWPT(s)));
+  } else {
+    // Phase 2: minimise FT + WFT (PT/WPT have 0 cost → solver prefers them)
+    FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varFT(s, p, b)))));
+    WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varWFT(s, b))));
+  }
   lines.push(" obj: " + objTerms.join(" + "));
 
   lines.push("");
@@ -212,6 +222,17 @@ function buildLP(input: SolverInput): string {
     }
   }
 
+  // ── Phase 2 only: total workers ≤ N_optimal from phase 1 ──────────────────
+  if (phase === 2 && totalCap > 0) {
+    const allVars: string[] = [];
+    FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => allVars.push(varFT(s, p, b)))));
+    PT_STARTS .forEach((s) => MON_FRI.forEach((p) => allVars.push(varPT(s, p))));
+    WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => allVars.push(varWFT(s, b))));
+    PT_STARTS .forEach((s) => allVars.push(varWPT(s)));
+    conCount++;
+    lines.push(` c${conCount}: ${allVars.join(" + ")} <= ${totalCap}`);
+  }
+
   // ── Bounds ─────────────────────────────────────────────────────────────────
   lines.push("");
   lines.push("Bounds");
@@ -340,35 +361,46 @@ self.onmessage = async (e: MessageEvent) => {
   const input = payload as SolverInput;
 
   try {
-    self.postMessage({ type: "progress", message: "Building LP model…" });
-    const lpString = buildLP(input);
-
     self.postMessage({ type: "progress", message: "Loading HiGHS solver…" });
-
     const highsModule = await import("highs");
     const highs = await highsModule.default({
       locateFile: (file: string) => `/${file}`,
     });
 
-    self.postMessage({ type: "progress", message: "Solving ILP (this may take a moment)…" });
-
+    // ── Phase 1: minimise total headcount ──────────────────────────────────
+    self.postMessage({ type: "progress", message: "Phase 1 — minimising total headcount…" });
     const t0 = Date.now();
-    const result = highs.solve(lpString, {});
-    const solveTimeMs = Date.now() - t0;
+    const lp1 = buildLP(input, 1);
+    const r1 = highs.solve(lp1, {});
 
-    if (result.Status !== "Optimal") {
+    if (r1.Status !== "Optimal") {
       const res: SolverResult = {
-        status: result.Status === "Infeasible" ? "infeasible" : "error",
+        status: r1.Status === "Infeasible" ? "infeasible" : "error",
         workers: [], totalWorkers: 0,
         ftCount: 0, ptCount: 0, wftCount: 0, wptCount: 0,
         coverage: Array.from({ length: 7 }, () => new Array(24).fill(0)),
         required: Array.from({ length: 7 }, () => new Array(24).fill(0)),
-        solveTimeMs,
-        errorMessage: `Solver status: ${result.Status}`,
+        solveTimeMs: Date.now() - t0,
+        errorMessage: `Phase 1 solver status: ${r1.Status}`,
       };
       self.postMessage({ type: "result", payload: res });
       return;
     }
+
+    // Sum all primal values to get the minimum total headcount N_opt
+    const cols1 = r1.Columns as Record<string, { Primal: number }>;
+    const nOpt = Math.round(
+      Object.values(cols1).reduce((sum, col) => sum + col.Primal, 0)
+    );
+
+    // ── Phase 2: at fixed total N_opt, minimise FT+WFT → maximise PT usage ─
+    self.postMessage({ type: "progress", message: `Phase 2 — maximising part-timer usage (N=${nOpt})…` });
+    const lp2 = buildLP(input, 2, nOpt);
+    const r2 = highs.solve(lp2, {});
+    const solveTimeMs = Date.now() - t0;
+
+    // If phase 2 fails for any reason, fall back to the phase 1 solution
+    const result = r2.Status === "Optimal" ? r2 : r1;
 
     self.postMessage({ type: "progress", message: "Building roster from solution…" });
 
