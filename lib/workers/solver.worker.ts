@@ -53,6 +53,41 @@ function varPT(s: number, p: number): string             { return `xPT_${s}_${p}
 function varWFT(s: number, b: number): string            { return `xWFT_${s}_${b}`; }
 function varWPT(s: number): string                       { return `xWPT_${s}`; }
 
+// ─── Variable pre-filtering ────────────────────────────────────────────────────
+//
+// Only include a variable in the LP if it covers at least one (day, hour) cell
+// with positive demand.  Variables with zero coverage potential are always 0 in
+// any feasible solution, so omitting them is semantically equivalent but produces
+// a smaller LP string — preventing HiGHS WASM LP-parser buffer overflows that
+// manifest as "function signature mismatch" / "memory access out of bounds".
+
+function isActiveFT(oph: number[][], s: number, p: number, b: number): boolean {
+  const sameDayHrs = ftHours(s, b);
+  const nextDayHrs = ftHoursRaw(s, b).filter((h) => h >= 24).map((h) => h - 24);
+  for (const d of ALL_DAYS) {
+    if (d === p) continue; // day off
+    if (sameDayHrs.some((h) => oph[d][h] > 0)) return true;
+    if (nextDayHrs.length > 0) {
+      const nd = (d + 1) % 7;
+      if (nextDayHrs.some((h) => oph[nd][h] > 0)) return true;
+    }
+  }
+  return false;
+}
+
+function isActivePT(oph: number[][], s: number, p: number): boolean {
+  const hrs = ptHours(s);
+  return ALL_DAYS.filter((d) => d !== p).some((d) => hrs.some((h) => oph[d][h] > 0));
+}
+
+function isActiveWFT(oph: number[][], s: number, b: number): boolean {
+  return ftHours(s, b).some((h) => [5, 6].some((d) => oph[d][h] > 0));
+}
+
+function isActiveWPT(oph: number[][], s: number): boolean {
+  return ptHours(s).some((h) => [5, 6].some((d) => oph[d][h] > 0));
+}
+
 // ─── LP builder ──────────────────────────────────────────────────────────────
 //
 // HiGHS WASM MIP solver crashes whenever objective coefficients are non-uniform
@@ -83,6 +118,32 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   const useWFT = capWk > 0;                // include xWFT vars
   const useWPT = capPt > 0 && capWk > 0;  // include xWPT vars (both caps must be > 0)
 
+  // Pre-filter: only keep variables that cover ≥1 demand slot.
+  // This keeps the LP string small enough for the HiGHS WASM LP parser.
+  interface FTVar { s: number; p: number; b: number }
+  interface PTVar { s: number; p: number }
+  interface WFTVar { s: number; b: number }
+
+  const ftVars: FTVar[] = [];
+  FT_STARTS.forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => {
+    if (isActiveFT(oph, s, p, b)) ftVars.push({ s, p, b });
+  })));
+
+  const ptVars: PTVar[] = [];
+  if (usePT) PT_STARTS.forEach((s) => MON_FRI.forEach((p) => {
+    if (isActivePT(oph, s, p)) ptVars.push({ s, p });
+  }));
+
+  const wftVars: WFTVar[] = [];
+  if (useWFT) WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => {
+    if (isActiveWFT(oph, s, b)) wftVars.push({ s, b });
+  }));
+
+  const wptStarts: number[] = [];
+  if (useWPT) PT_STARTS.forEach((s) => {
+    if (isActiveWPT(oph, s)) wptStarts.push(s);
+  });
+
   const lines: string[] = [];
 
   // ── Objective ──────────────────────────────────────────────────────────────
@@ -90,14 +151,14 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   const objTerms: string[] = [];
   if (phase === 1) {
     // Phase 1: minimise total headcount (all active vars get coefficient 1)
-    FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varFT(s, p, b)))));
-    if (usePT)  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => objTerms.push(varPT(s, p))));
-    if (useWFT) WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varWFT(s, b))));
-    if (useWPT) PT_STARTS .forEach((s) => objTerms.push(varWPT(s)));
+    ftVars .forEach(({ s, p, b }) => objTerms.push(varFT(s, p, b)));
+    ptVars .forEach(({ s, p })    => objTerms.push(varPT(s, p)));
+    wftVars.forEach(({ s, b })    => objTerms.push(varWFT(s, b)));
+    wptStarts.forEach((s)         => objTerms.push(varWPT(s)));
   } else {
     // Phase 2: minimise FT + WFT only (PT/WPT are free → solver prefers them)
-    FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varFT(s, p, b)))));
-    if (useWFT) WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => objTerms.push(varWFT(s, b))));
+    ftVars .forEach(({ s, p, b }) => objTerms.push(varFT(s, p, b)));
+    wftVars.forEach(({ s, b })    => objTerms.push(varWFT(s, b)));
   }
   lines.push(" obj: " + objTerms.join(" + "));
 
@@ -115,42 +176,31 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
       const terms: string[] = [];
 
       // FT same-day
-      FT_STARTS.forEach((s) => {
-        FT_BREAK_OFFSETS.forEach((b) => {
-          if (!ftHours(s, b).includes(h)) return;
-          MON_FRI.forEach((p) => { if (d !== p) terms.push(varFT(s, p, b)); });
-        });
+      ftVars.forEach(({ s, p, b }) => {
+        if (d !== p && ftHours(s, b).includes(h)) terms.push(varFT(s, p, b));
       });
 
       // FT overnight: shift started on prevDay, wraps into hour h on day d
       const prevDay = (d - 1 + 7) % 7;
-      FT_STARTS.filter((s) => s >= 20).forEach((s) => {
-        FT_BREAK_OFFSETS.forEach((b) => {
-          if (!ftHoursRaw(s, b).includes(h + 24)) return;
-          MON_FRI.forEach((p) => { if (prevDay !== p) terms.push(varFT(s, p, b)); });
-        });
+      ftVars.forEach(({ s, p, b }) => {
+        if (s < 20) return; // only overnight starts
+        if (p === prevDay) return; // day off is the shift day
+        if (ftHoursRaw(s, b).includes(h + 24)) terms.push(varFT(s, p, b));
       });
 
       // PT (no overnight)
-      if (usePT) {
-        PT_STARTS.forEach((s) => {
-          if (!ptHours(s).includes(h)) return;
-          MON_FRI.forEach((p) => { if (d !== p) terms.push(varPT(s, p)); });
-        });
-      }
+      ptVars.forEach(({ s, p }) => {
+        if (d !== p && ptHours(s).includes(h)) terms.push(varPT(s, p));
+      });
 
       // Weekend workers (Sat=5, Sun=6 only)
       if (d === 5 || d === 6) {
-        if (useWFT) {
-          WFT_STARTS.forEach((s) => {
-            FT_BREAK_OFFSETS.forEach((b) => {
-              if (ftHours(s, b).includes(h)) terms.push(varWFT(s, b));
-            });
-          });
-        }
-        if (useWPT) {
-          PT_STARTS.forEach((s) => { if (ptHours(s).includes(h)) terms.push(varWPT(s)); });
-        }
+        wftVars.forEach(({ s, b }) => {
+          if (ftHours(s, b).includes(h)) terms.push(varWFT(s, b));
+        });
+        wptStarts.forEach((s) => {
+          if (ptHours(s).includes(h)) terms.push(varWPT(s));
+        });
       }
 
       if (terms.length === 0) continue;
@@ -164,13 +214,11 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   // and the cap is actually binding (cap < 100).
   if (usePT && capPt < 100) {
     // PT-cap: (100-capPt)(PT+WPT) - capPt(FT+WFT) ≤ 0
-    const ptV: string[] = [];
-    PT_STARTS.forEach((s) => MON_FRI.forEach((p) => ptV.push(varPT(s, p))));
-    if (useWPT) PT_STARTS.forEach((s) => ptV.push(varWPT(s)));
+    const ptV = ptVars.map(({ s, p }) => varPT(s, p));
+    wptStarts.forEach((s) => ptV.push(varWPT(s)));
 
-    const ftV: string[] = [];
-    FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => ftV.push(varFT(s, p, b)))));
-    if (useWFT) WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => ftV.push(varWFT(s, b))));
+    const ftV = ftVars.map(({ s, p, b }) => varFT(s, p, b));
+    wftVars.forEach(({ s, b }) => ftV.push(varWFT(s, b)));
 
     const lhs = ptV.map((v) => `${100 - capPt} ${v}`).join(" + ")
       + " - " + ftV.map((v) => `${capPt} ${v}`).join(" - ");
@@ -180,13 +228,11 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
 
   if ((useWFT || useWPT) && capWk < 100) {
     // Weekender-cap: (100-capWk)(WFT+WPT) - capWk(FT+PT) ≤ 0
-    const wkV: string[] = [];
-    if (useWFT) WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => wkV.push(varWFT(s, b))));
-    if (useWPT) PT_STARTS .forEach((s) => wkV.push(varWPT(s)));
+    const wkV = wftVars.map(({ s, b }) => varWFT(s, b));
+    wptStarts.forEach((s) => wkV.push(varWPT(s)));
 
-    const wdV: string[] = [];
-    FT_STARTS.forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => wdV.push(varFT(s, p, b)))));
-    if (usePT) PT_STARTS.forEach((s) => MON_FRI.forEach((p) => wdV.push(varPT(s, p))));
+    const wdV = ftVars.map(({ s, p, b }) => varFT(s, p, b));
+    ptVars.forEach(({ s, p }) => wdV.push(varPT(s, p)));
 
     const lhs = wkV.map((v) => `${100 - capWk} ${v}`).join(" + ")
       + " - " + wdV.map((v) => `${capWk} ${v}`).join(" - ");
@@ -196,31 +242,30 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
 
   // ── Phase 2 only: total active workers ≤ N_optimal from phase 1 ───────────
   if (phase === 2 && totalCap > 0) {
-    const allV: string[] = [];
-    FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => allV.push(varFT(s, p, b)))));
-    if (usePT)  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => allV.push(varPT(s, p))));
-    if (useWFT) WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => allV.push(varWFT(s, b))));
-    if (useWPT) PT_STARTS .forEach((s) => allV.push(varWPT(s)));
+    const allV = ftVars.map(({ s, p, b }) => varFT(s, p, b));
+    ptVars .forEach(({ s, p }) => allV.push(varPT(s, p)));
+    wftVars.forEach(({ s, b }) => allV.push(varWFT(s, b)));
+    wptStarts.forEach((s)      => allV.push(varWPT(s)));
     conCount++;
     lines.push(` c${conCount}: ${allV.join(" + ")} <= ${totalCap}`);
   }
 
-  // ── Bounds (only active variable types) ────────────────────────────────────
+  // ── Bounds (only active, demand-covering variables) ────────────────────────
   lines.push("");
   lines.push("Bounds");
-  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => lines.push(` 0 <= ${varFT(s, p, b)}`))));
-  if (usePT)  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => lines.push(` 0 <= ${varPT(s, p)}`)));
-  if (useWFT) WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => lines.push(` 0 <= ${varWFT(s, b)}`)));
-  if (useWPT) PT_STARTS .forEach((s) => lines.push(` 0 <= ${varWPT(s)}`));
+  ftVars .forEach(({ s, p, b }) => lines.push(` 0 <= ${varFT(s, p, b)}`));
+  ptVars .forEach(({ s, p })    => lines.push(` 0 <= ${varPT(s, p)}`));
+  wftVars.forEach(({ s, b })    => lines.push(` 0 <= ${varWFT(s, b)}`));
+  wptStarts.forEach((s)         => lines.push(` 0 <= ${varWPT(s)}`));
 
-  // ── General / integer declarations (only active variable types) ────────────
+  // ── General / integer declarations ────────────────────────────────────────
   lines.push("");
   lines.push("General");
   const generals: string[] = [];
-  FT_STARTS .forEach((s) => MON_FRI.forEach((p) => FT_BREAK_OFFSETS.forEach((b) => generals.push(varFT(s, p, b)))));
-  if (usePT)  PT_STARTS .forEach((s) => MON_FRI.forEach((p) => generals.push(varPT(s, p))));
-  if (useWFT) WFT_STARTS.forEach((s) => FT_BREAK_OFFSETS.forEach((b) => generals.push(varWFT(s, b))));
-  if (useWPT) PT_STARTS .forEach((s) => generals.push(varWPT(s)));
+  ftVars .forEach(({ s, p, b }) => generals.push(varFT(s, p, b)));
+  ptVars .forEach(({ s, p })    => generals.push(varPT(s, p)));
+  wftVars.forEach(({ s, b })    => generals.push(varWFT(s, b)));
+  wptStarts.forEach((s)         => generals.push(varWPT(s)));
   lines.push(" " + generals.join(" "));
 
   lines.push("");
