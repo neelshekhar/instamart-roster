@@ -21,12 +21,20 @@ interface WeeklyOverviewChartProps {
 }
 
 export function WeeklyOverviewChart({ result }: WeeklyOverviewChartProps) {
-  // Per-day totals
+  // Per-day totals.
+  // Efficiency is measured only at demand hours: workers present during
+  // zero-demand hours (e.g. early starts before the store opens) are an
+  // unavoidable structural cost of shift-based scheduling and should not
+  // penalise the efficiency metric.
   const dailyData = DAYS.map((day, d) => {
-    const required = result.required[d].reduce((a, b) => a + b, 0);
-    const covered  = result.coverage[d].reduce((a, b) => a + b, 0);
-    const surplus  = covered - required;
-    const eff      = covered > 0 ? Math.round((required / covered) * 100) : 0;
+    let required = 0;
+    let covered  = 0; // only at hours where demand > 0
+    for (let h = 0; h < 24; h++) {
+      required += result.required[d][h];
+      if (result.required[d][h] > 0) covered += result.coverage[d][h];
+    }
+    const surplus = covered - required;
+    const eff     = covered > 0 ? Math.round((required / covered) * 100) : 0;
     return { day, required, covered, surplus, eff };
   });
 
@@ -43,7 +51,7 @@ export function WeeklyOverviewChart({ result }: WeeklyOverviewChartProps) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard label="Total Workers"    value={String(totalWorkers)} accent="blue" />
         <KpiCard label="Required Worker-hrs" value={totalRequired.toLocaleString()} accent="gray" />
-        <KpiCard label="Deployed Worker-hrs" value={totalCovered.toLocaleString()} accent="gray" />
+        <KpiCard label="Deployed at Demand hrs" value={totalCovered.toLocaleString()} accent="gray" />
         <KpiCard label="Labor Efficiency"    value={`${overallEff}%`} accent={overallEff >= 85 ? "green" : overallEff >= 70 ? "yellow" : "orange"} />
       </div>
 
