@@ -366,13 +366,29 @@ self.onmessage = async (e: MessageEvent) => {
     );
 
     // ── Phase 2: at fixed total N_opt, minimise FT+WFT → maximise PT usage ─
-    self.postMessage({ type: "progress", message: `Phase 2 — maximising part-timer usage (N=${nOpt})…` });
-    const lp2 = buildLP(input, 2, nOpt);
-    const r2 = highs.solve(lp2, {});
-    const solveTimeMs = Date.now() - t0;
+    // Skip when capPt=0: no PT/WPT vars exist, Phase 2 gives the same answer
+    // as Phase 1 and adding a redundant total-cap constraint can crash HiGHS.
+    //
+    // When Phase 2 does run we create a FRESH HiGHS instance.  Reusing the
+    // Phase-1 instance causes "memory access out of bounds" because HiGHS WASM
+    // does not fully reset its heap between successive solve() calls, so the
+    // Phase-2 LP parser reads stale/corrupted memory left by Phase 1.
+    const runPhase2 = Math.round(input.config.partTimerCapPct) > 0;
+    let result = r1;
 
-    // If phase 2 fails for any reason, fall back to the phase 1 solution
-    const result = r2.Status === "Optimal" ? r2 : r1;
+    if (runPhase2) {
+      try {
+        self.postMessage({ type: "progress", message: `Phase 2 — maximising part-timer usage (N=${nOpt})…` });
+        const highs2 = await highsModule.default({ locateFile: (file: string) => `/${file}` });
+        const lp2 = buildLP(input, 2, nOpt);
+        const r2 = highs2.solve(lp2, {});
+        if (r2.Status === "Optimal") result = r2;
+      } catch {
+        // Phase 2 failed — silently use Phase 1 solution (already optimal headcount)
+      }
+    }
+
+    const solveTimeMs = Date.now() - t0;
 
     self.postMessage({ type: "progress", message: "Building roster from solution…" });
 
