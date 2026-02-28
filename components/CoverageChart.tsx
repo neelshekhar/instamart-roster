@@ -2,15 +2,15 @@
 
 import { useState } from "react";
 import {
-  BarChart,
+  ComposedChart,
   Bar,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
   ResponsiveContainer,
-  ReferenceLine,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,14 +28,17 @@ export function CoverageChart({ result }: CoverageChartProps) {
   const chartData = Array.from({ length: 24 }, (_, h) => ({
     hour: `${String(h).padStart(2, "0")}:00`,
     Required: result.required[selectedDay][h],
-    Covered: result.coverage[selectedDay][h],
-    Gap: Math.max(0, result.required[selectedDay][h] - result.coverage[selectedDay][h]),
+    Deployed: result.coverage[selectedDay][h],
   }));
 
   const maxVal = Math.max(
     ...result.coverage[selectedDay],
     ...result.required[selectedDay]
   );
+
+  const totalRequired = result.required[selectedDay].reduce((a, b) => a + b, 0);
+  const totalDeployed = result.coverage[selectedDay].reduce((a, b) => a + b, 0);
+  const netSurplus = totalDeployed - totalRequired;
 
   return (
     <Card>
@@ -44,7 +47,6 @@ export function CoverageChart({ result }: CoverageChartProps) {
           <CardTitle className="text-base">Coverage vs Required — {DAYS[selectedDay]}</CardTitle>
           <div className="flex gap-1 flex-wrap">
             {DAYS.map((day, d) => {
-              // Check if this day has any demand
               const hasDemand = result.required[d].some((v) => v > 0);
               const fullyMet = result.required[d].every(
                 (v, h) => v === 0 || result.coverage[d][h] >= v
@@ -70,7 +72,7 @@ export function CoverageChart({ result }: CoverageChartProps) {
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={320}>
-          <BarChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+          <ComposedChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
             <XAxis
               dataKey="hour"
@@ -90,30 +92,35 @@ export function CoverageChart({ result }: CoverageChartProps) {
               formatter={(value: number | undefined, name: string | undefined) => [value ?? 0, name ?? ""]}
             />
             <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Bar dataKey="Covered" fill="#3b82f6" opacity={0.8} radius={[2, 2, 0, 0]} />
-            <Bar dataKey="Required" fill="transparent" stroke="#ef4444" strokeWidth={2} />
-          </BarChart>
+            {/* Required as a filled area (blue) — shows the demand envelope */}
+            <Area
+              type="monotone"
+              dataKey="Required"
+              fill="#93c5fd"
+              stroke="#3b82f6"
+              fillOpacity={0.3}
+              strokeWidth={2}
+            />
+            {/* Deployed as bars (green) — actual headcount scheduled */}
+            <Bar dataKey="Deployed" fill="#10b981" radius={[4, 4, 0, 0]} barSize={20} />
+          </ComposedChart>
         </ResponsiveContainer>
 
         {/* Daily stats */}
         <div className="mt-4 grid grid-cols-3 gap-3 text-center text-sm">
           <div className="bg-blue-50 rounded p-2">
-            <div className="font-bold text-blue-700">
-              {result.coverage[selectedDay].reduce((a, b) => a + b, 0)}
-            </div>
-            <div className="text-xs text-gray-500">Total covered slots</div>
+            <div className="font-bold text-blue-700">{totalRequired}</div>
+            <div className="text-xs text-gray-500">Required worker-hrs</div>
           </div>
-          <div className="bg-red-50 rounded p-2">
-            <div className="font-bold text-red-700">
-              {result.required[selectedDay].reduce((a, b) => a + b, 0)}
-            </div>
-            <div className="text-xs text-gray-500">Total required slots</div>
+          <div className="bg-green-50 rounded p-2">
+            <div className="font-bold text-green-700">{totalDeployed}</div>
+            <div className="text-xs text-gray-500">Deployed worker-hrs</div>
           </div>
-          <div className="bg-gray-50 rounded p-2">
-            <div className="font-bold text-gray-700">
-              {result.required[selectedDay].filter((v, h) => v > 0 && result.coverage[selectedDay][h] < v).length}
+          <div className={`rounded p-2 ${netSurplus < 0 ? "bg-red-50" : "bg-gray-50"}`}>
+            <div className={`font-bold ${netSurplus < 0 ? "text-red-700" : "text-gray-700"}`}>
+              {netSurplus >= 0 ? "+" : ""}{netSurplus}
             </div>
-            <div className="text-xs text-gray-500">Under-covered hours</div>
+            <div className="text-xs text-gray-500">Net surplus</div>
           </div>
         </div>
       </CardContent>

@@ -7,7 +7,7 @@ import type { SolverResult } from "@/lib/types";
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOURS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`);
 
-type ViewMode = "efficiency" | "surplus";
+type ViewMode = "efficiency" | "surplus" | "actual";
 
 interface UtilizationHeatmapProps {
   result: SolverResult;
@@ -104,6 +104,12 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
             >
               Surplus workers
             </button>
+            <button
+              onClick={() => setView("actual")}
+              className={`px-3 py-1.5 transition-colors border-l border-gray-200 ${view === "actual" ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              Actual vs Required
+            </button>
           </div>
         </div>
       </CardHeader>
@@ -150,7 +156,7 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
                 Green = efficient · Yellow/orange = idle surplus · Red = understaffed.
               </p>
             </>
-          ) : (
+          ) : view === "surplus" ? (
             <>
               <p className="font-semibold">Reading the Surplus workers heatmap</p>
               <p>
@@ -158,6 +164,15 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
                 <strong>0</strong> = exactly right · <strong>+2</strong> = 2 workers idle that hour ·{" "}
                 negative = understaffed (should not occur in an optimal roster).
                 Green = tight · Yellow/orange = excess coverage · Red = gap.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold">Reading the Actual vs Required heatmap</p>
+              <p>
+                Each cell shows <strong>deployed / required</strong> workers for that slot.{" "}
+                <strong>8/8</strong> = exact coverage · <strong>10/8</strong> = 2 excess workers ·{" "}
+                <strong>7/8</strong> = 1 worker short. Color follows the same efficiency scale.
               </p>
             </>
           )}
@@ -191,24 +206,28 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
                   </td>
                   {cells[d].map((cell, h) => {
                     const { bg, text } = cell === null
-                      ? (view === "efficiency" ? efficiencyColor(null) : surplusColor(null, 0))
+                      ? efficiencyColor(null)
                       : view === "efficiency"
                       ? efficiencyColor(cell.eff)
-                      : surplusColor(cell.surplus, cell.req);
+                      : view === "surplus"
+                      ? surplusColor(cell.surplus, cell.req)
+                      : efficiencyColor(cell.eff); // "actual" uses efficiency coloring
 
                     const displayVal = cell === null
                       ? ""
                       : view === "efficiency"
                       ? `${cell.eff}`
-                      : cell.surplus === 0
-                      ? "0"
-                      : `${cell.surplus > 0 ? "+" : ""}${cell.surplus}`;
+                      : view === "surplus"
+                      ? (cell.surplus === 0 ? "0" : `${cell.surplus > 0 ? "+" : ""}${cell.surplus}`)
+                      : `${cell.cov}/${cell.req}`; // "actual": deployed/required
 
                     const tooltip = cell === null
                       ? `${day} ${HOURS[h]}: No demand`
                       : view === "efficiency"
                       ? `${day} ${HOURS[h]}: ${cell.eff}% efficient — ${cell.req} needed, ${cell.cov} deployed (${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus)`
-                      : `${day} ${HOURS[h]}: ${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus workers — ${cell.req} needed, ${cell.cov} deployed`;
+                      : view === "surplus"
+                      ? `${day} ${HOURS[h]}: ${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus workers — ${cell.req} needed, ${cell.cov} deployed`
+                      : `${day} ${HOURS[h]}: ${cell.cov} deployed / ${cell.req} required (${cell.eff}% efficient)`;
 
                     return (
                       <td key={h} className="p-0">
@@ -244,7 +263,7 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
 
         {/* ── Legend ── */}
         <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500">
-          {view === "efficiency" ? (
+          {view === "efficiency" || view === "actual" ? (
             <>
               <LegendSwatch color="#16a34a" label="≥95% efficient" />
               <LegendSwatch color="#4ade80" label="85–94%" />
