@@ -37,7 +37,7 @@ export function ResultsSummary({ result }: ResultsSummaryProps) {
     ? Math.round(((ptCount + wptCount) / totalWorkers) * 100)
     : 0;
 
-  // Service level
+  // Service level (slot-based)
   let totalSlots = 0;
   let coveredSlots = 0;
   for (let d = 0; d < 7; d++) {
@@ -50,8 +50,30 @@ export function ResultsSummary({ result }: ResultsSummaryProps) {
   }
   const coveragePct = totalSlots > 0 ? Math.round((coveredSlots / totalSlots) * 100) : 100;
 
+  // Order fill rate (demand-weighted)
+  const ophMatrix = result.oph;
+  let totalOrders = 0;
+  let ordersServed = 0;
+  if (ophMatrix) {
+    for (let d = 0; d < 7; d++) {
+      for (let h = 0; h < 24; h++) {
+        const demand = ophMatrix[d][h];
+        if (demand <= 0) continue;
+        totalOrders += demand;
+        const req = result.required[d][h];
+        const cov = result.coverage[d][h];
+        if (req === 0 || cov >= req) {
+          ordersServed += demand;
+        } else if (cov > 0) {
+          ordersServed += Math.round((cov / req) * demand);
+        }
+      }
+    }
+  }
+  const orderFillPct = totalOrders > 0 ? Math.round((ordersServed / totalOrders) * 100) : 100;
+
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
 
       {/* 1 — Headcount */}
       <Card>
@@ -140,6 +162,24 @@ export function ResultsSummary({ result }: ResultsSummaryProps) {
           </div>
         </CardContent>
       </Card>
+
+      {/* 6 — Order fill rate */}
+      {ophMatrix && (
+        <Card>
+          <CardHeader className="pb-1">
+            <CardTitle className="text-sm font-medium text-gray-500">Order Fill Rate</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className={`text-3xl font-bold ${orderFillPct === 100 ? "text-green-600" : "text-orange-600"}`}>
+              {orderFillPct}%
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              {ordersServed.toLocaleString("en-IN")} / {totalOrders.toLocaleString("en-IN")} orders
+            </p>
+            <Progress value={orderFillPct} className="mt-2 h-2" />
+          </CardContent>
+        </Card>
+      )}
 
     </div>
   );

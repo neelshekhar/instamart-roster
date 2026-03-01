@@ -85,6 +85,25 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
     : 0;
   const surplusHours = totalCovered - totalRequired;
 
+  // Order fill metrics (demand-weighted)
+  const oph = result.oph;
+  let totalOrders = 0;
+  let ordersServed = 0;
+  if (oph) {
+    for (let d = 0; d < 7; d++) {
+      for (let h = 0; h < 24; h++) {
+        const demand = oph[d][h];
+        if (demand <= 0) continue;
+        totalOrders += demand;
+        const req = result.required[d][h];
+        const cov = result.coverage[d][h];
+        if (req === 0 || cov >= req) ordersServed += demand;
+        else if (cov > 0) ordersServed += Math.round((cov / req) * demand);
+      }
+    }
+  }
+  const orderFillPct = totalOrders > 0 ? Math.round((ordersServed / totalOrders) * 100) : 100;
+
   return (
     <Card>
       <CardHeader>
@@ -117,7 +136,7 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
       <CardContent className="space-y-5">
 
         {/* ── KPI cards ── */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className={`grid gap-3 ${oph ? "grid-cols-2 md:grid-cols-5" : "grid-cols-2 md:grid-cols-4"}`}>
           <KpiCard
             value={`${serviceLevelPct}%`}
             label="Service level"
@@ -142,6 +161,14 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
             sub="Deployed but not strictly needed"
             accent="gray"
           />
+          {oph && (
+            <KpiCard
+              value={`${orderFillPct}%`}
+              label="Order fill rate"
+              sub={`${ordersServed.toLocaleString("en-IN")} / ${totalOrders.toLocaleString("en-IN")} orders`}
+              accent={orderFillPct === 100 ? "green" : "orange"}
+            />
+          )}
         </div>
 
         {/* ── What does this mean? ── */}

@@ -298,8 +298,10 @@ def solve(inp):
                 "id": wid, "type": "FT",
                 "shiftStart": s, "shiftEnd": s + 9,
                 "dayOff": p,
-                # All 9 shift hours appear in productiveHours (each has ≥30 min worked)
-                "productiveHours": sorted(h for h in cov if h < 24),
+                # All 9 shift hours mapped mod-24 so overnight hours (raw ≥ 24)
+                # appear as 0–6 and are routed to the next calendar day by the
+                # coverage matrix builder via the `h < shiftStart` check.
+                "productiveHours": sorted(h % 24 for h in cov),
                 "breakHalfSlots": [bs1, bs2],
             })
             wid += 1; ft_count += 1
@@ -366,6 +368,7 @@ def solve(inp):
         "wftCount": wft_count, "wptCount": wpt_count,
         "coverage": coverage,
         "required": required,
+        "oph": oph,
         "solveTimeMs": solve_ms,
     }
 

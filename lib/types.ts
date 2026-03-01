@@ -50,6 +50,8 @@ export interface SolverResult {
   coverage: number[][];
   /** Required matrix: [day][hour] = ceil(oph/rate) */
   required: number[][];
+  /** Raw demand matrix [day][hour] = orders per hour (echoed from input) */
+  oph?: OphMatrix;
   solveTimeMs?: number;
   errorMessage?: string;
 }

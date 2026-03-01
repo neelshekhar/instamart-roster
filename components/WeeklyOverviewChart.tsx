@@ -26,33 +26,57 @@ export function WeeklyOverviewChart({ result }: WeeklyOverviewChartProps) {
   // zero-demand hours (e.g. early starts before the store opens) are an
   // unavoidable structural cost of shift-based scheduling and should not
   // penalise the efficiency metric.
+  const oph = result.oph;
   const dailyData = DAYS.map((day, d) => {
     let required = 0;
     let covered  = 0; // only at hours where demand > 0
+    let orders   = 0;
+    let ordersServed = 0;
     for (let h = 0; h < 24; h++) {
       required += result.required[d][h];
       if (result.required[d][h] > 0) covered += result.coverage[d][h];
+      if (oph) {
+        const demand = oph[d][h];
+        orders += demand;
+        const req = result.required[d][h];
+        const cov = result.coverage[d][h];
+        if (demand > 0) {
+          if (req === 0 || cov >= req) ordersServed += demand;
+          else if (cov > 0) ordersServed += Math.round((cov / req) * demand);
+        }
+      }
     }
     const surplus = covered - required;
     const eff     = covered > 0 ? Math.round((required / covered) * 100) : 0;
-    return { day, required, covered, surplus, eff };
+    return { day, required, covered, surplus, eff, orders, ordersServed };
   });
 
   const { totalWorkers } = result;
 
   // Weekly totals
-  const totalRequired = dailyData.reduce((a, d) => a + d.required, 0);
-  const totalCovered  = dailyData.reduce((a, d) => a + d.covered, 0);
-  const overallEff    = totalCovered > 0 ? Math.round((totalRequired / totalCovered) * 100) : 0;
+  const totalRequired    = dailyData.reduce((a, d) => a + d.required, 0);
+  const totalCovered     = dailyData.reduce((a, d) => a + d.covered, 0);
+  const totalOrders      = dailyData.reduce((a, d) => a + d.orders, 0);
+  const totalOrdersServed = dailyData.reduce((a, d) => a + d.ordersServed, 0);
+  const overallEff       = totalCovered > 0 ? Math.round((totalRequired / totalCovered) * 100) : 0;
+  const orderFillPct     = totalOrders > 0 ? Math.round((totalOrdersServed / totalOrders) * 100) : 100;
 
   return (
     <div className="space-y-4">
       {/* KPI row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard label="Total Workers"    value={String(totalWorkers)} accent="blue" />
-        <KpiCard label="Required Worker-hrs" value={totalRequired.toLocaleString()} accent="gray" />
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <KpiCard label="Total Workers"         value={String(totalWorkers)} accent="blue" />
+        <KpiCard label="Required Worker-hrs"   value={totalRequired.toLocaleString()} accent="gray" />
         <KpiCard label="Deployed at Demand hrs" value={totalCovered.toLocaleString()} accent="gray" />
-        <KpiCard label="Labor Efficiency"    value={`${overallEff}%`} accent={overallEff >= 85 ? "green" : overallEff >= 70 ? "yellow" : "orange"} />
+        <KpiCard label="Labor Efficiency"      value={`${overallEff}%`} accent={overallEff >= 85 ? "green" : overallEff >= 70 ? "yellow" : "orange"} />
+        {oph && (
+          <KpiCard
+            label="Weekly Orders Served"
+            value={`${orderFillPct}%`}
+            sub={`${totalOrdersServed.toLocaleString("en-IN")} / ${totalOrders.toLocaleString("en-IN")}`}
+            accent={orderFillPct === 100 ? "green" : "orange"}
+          />
+        )}
       </div>
 
       {/* Composed bar+area chart — per day required vs covered */}
@@ -99,12 +123,14 @@ export function WeeklyOverviewChart({ result }: WeeklyOverviewChartProps) {
                 <th className="text-right py-2 px-3">Required hrs</th>
                 <th className="text-right py-2 px-3">Deployed hrs</th>
                 <th className="text-right py-2 px-3">Surplus</th>
+                {oph && <th className="text-right py-2 px-3">Orders</th>}
                 <th className="py-2 px-3">Efficiency</th>
               </tr>
             </thead>
             <tbody>
-              {dailyData.map(({ day, required, covered, surplus, eff }) => {
+              {dailyData.map(({ day, required, covered, surplus, eff, orders, ordersServed }) => {
                 if (required === 0) return null;
+                const dayFill = orders > 0 ? Math.round((ordersServed / orders) * 100) : 100;
                 return (
                   <tr key={day} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="py-2 px-3 font-medium text-gray-800">{day}</td>
@@ -117,6 +143,12 @@ export function WeeklyOverviewChart({ result }: WeeklyOverviewChartProps) {
                     >
                       {surplus >= 0 ? "+" : ""}{surplus}
                     </td>
+                    {oph && (
+                      <td className={`py-2 px-3 text-right tabular-nums text-xs font-medium ${dayFill === 100 ? "text-green-700" : "text-orange-600"}`}>
+                        {orders.toLocaleString("en-IN")}
+                        <span className="text-gray-400 font-normal"> · {dayFill}%</span>
+                      </td>
+                    )}
                     <td className="py-2 px-3">
                       <div className="flex items-center gap-2">
                         <div className="flex-1 bg-gray-100 rounded-full h-1.5">
@@ -153,12 +185,13 @@ const accentColors: Record<string, { bg: string; val: string }> = {
   gray:   { bg: "bg-gray-50",   val: "text-gray-700" },
 };
 
-function KpiCard({ label, value, accent }: { label: string; value: string; accent: string }) {
+function KpiCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent: string }) {
   const c = accentColors[accent] ?? accentColors.gray;
   return (
     <div className={`${c.bg} rounded-lg p-3`}>
       <div className={`text-2xl font-bold ${c.val}`}>{value}</div>
       <div className="text-xs font-medium text-gray-600 mt-0.5">{label}</div>
+      {sub && <div className="text-xs text-gray-400 mt-0.5">{sub}</div>}
     </div>
   );
 }
