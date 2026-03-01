@@ -173,26 +173,34 @@ def print_shift_distribution(result):
         print(f"  {wtype:<5} {fmt_hours(s):>6}  {'█' * count} {count}")
 
 
+def fmt_halfslot(s, bs):
+    """Format an absolute time from shift start s and half-slot offset bs."""
+    total_min = s * 60 + bs * 30
+    h = (total_min // 60) % 24
+    m = total_min % 60
+    return f"{h:02d}:{m:02d}"
+
+
 def print_break_audit(result, oph, rate):
-    """Show each unique FT/WFT shift config: break hours vs peak in window."""
+    """Show each unique FT/WFT shift config: break half-slots vs peak in window."""
     from collections import Counter
     configs = Counter()
     for w in result["workers"]:
         if w["type"] not in ("FT", "WFT"):
             continue
         s = w["shiftStart"]
-        offsets = tuple(w.get("breakOffsets", []))
-        configs[(w["type"], s, offsets)] += 1
+        bhs = tuple(w.get("breakHalfSlots", []))
+        configs[(w["type"], s, bhs)] += 1
 
     if not configs:
         return
 
-    print("\n  BREAK AUDIT (FT/WFT)  — breaks must not be within ±1 of peak")
-    print(f"  {'Type':<5} {'Shift':>6}  {'Break1':>6}  {'Break2':>6}  {'Peak(s) in window':>20}  {'OK?':>4}  Count")
-    print("  " + "-" * 75)
+    print("\n  BREAK AUDIT (FT/WFT)  — neither break may be within ±1 h of peak")
+    print(f"  {'Type':<5} {'Shift':>6}  {'Break1':>7}  {'Break2':>7}  {'Peak(s) in window':>20}  {'OK?':>4}  Count")
+    print("  " + "-" * 78)
 
-    for (wtype, s, offsets), count in sorted(configs.items()):
-        # Find peak in shift window on each active day
+    for (wtype, s, bhs), count in sorted(configs.items()):
+        # Find peak hours in shift window on each active day
         active_days = [5, 6] if wtype == "WFT" else list(range(7))
         all_peaks = set()
         for d in active_days:
@@ -208,23 +216,23 @@ def print_break_audit(result, oph, rate):
                 if dem == best and dem > 0:
                     all_peaks.add(h_raw % 24)
 
-        if not offsets:
+        if not bhs:
             ok = "?"
             b1_str = b2_str = "?"
         else:
-            b1_raw, b2_raw = s + offsets[0], s + offsets[1]
+            bs1, bs2 = bhs
+            # Check in half-slot units: ±1 h = ±2 half-slots
             conflict = any(
-                abs(b_raw - peak_h) <= 1
-                for b_raw in (b1_raw, b2_raw)
-                for peak_h in [s + off for off in range(9)
-                               if (s + off) % 24 in all_peaks]
+                abs((2 * s + bs) - 2 * peak_h) <= 2
+                for bs in (bs1, bs2)
+                for peak_h in all_peaks
             )
             ok = "✓" if not conflict else "✗"
-            b1_str = fmt_hours(b1_raw % 24)
-            b2_str = fmt_hours(b2_raw % 24)
+            b1_str = fmt_halfslot(s, bs1)
+            b2_str = fmt_halfslot(s, bs2)
 
         peaks_str = ",".join(fmt_hours(h) for h in sorted(all_peaks)) or "none"
-        print(f"  {wtype:<5} {fmt_hours(s):>6}  {b1_str:>6}  {b2_str:>6}  {peaks_str:>20}  {ok:>4}  {count}")
+        print(f"  {wtype:<5} {fmt_hours(s):>6}  {b1_str:>7}  {b2_str:>7}  {peaks_str:>20}  {ok:>4}  {count}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

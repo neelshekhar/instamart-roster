@@ -10,6 +10,19 @@ Objective: minimise total paid hours.
 (ratio is what matters; CP-SAT handles integer coefficients of any size)
 
 Single-phase solve — no two-phase workaround needed (unlike HiGHS WASM).
+
+Break model for FT / WFT:
+  Each shift is 9 hours; workers take 1 hour of unpaid break split into
+  TWO staggered 30-min breaks.  Breaks are specified as half-slot offsets
+  within the shift (0 = first :00-:30, 1 = first :30-:00, …, 17 = last :30).
+  Constraints:
+    • Break 1 (bs1): half-slot ≥ 4  (after first 2 h = 4 half-slots)
+    • Break 2 (bs2): half-slot ≤ 13 (before last 2 h; slot 14 starts at 7 h)
+    • bs2 ≥ bs1 + 4  (at least 2 h = 4 half-slots apart)
+  Coverage: the coverage constraint is scaled ×2.  A fully productive hour
+  contributes 2; an hour that contains one break half-slot contributes 1
+  (worker is still productive for the other 30 min of that hour).
+  Net productive time: 7 × 60 + 2 × 30 = 480 min = 8 h  ✓
 """
 
 import json
@@ -18,32 +31,42 @@ import sys
 import time
 from ortools.sat.python import cp_model
 
-# ── Shift definitions (mirrored from solver.worker.ts) ────────────────────────
+# ── Shift definitions ─────────────────────────────────────────────────────────
 FT_STARTS  = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 21, 22, 23]
 PT_STARTS  = list(range(5, 21))   # [5..20]
 WFT_STARTS = list(range(5, 16))   # [5..15]  day-only for weekenders
 
-# Two staggered 30-min breaks for FT/WFT.
-# Break 1 (b1): offset ∈ [2, 6] from shift start (after first 2h)
-# Break 2 (b2): offset ∈ [2, 6] from shift start (before last 2h of 9h shift)
-# Constraint: b2 >= b1 + 2  (at least 2 hours apart)
-# Valid pairs: (2,4),(2,5),(2,6),(3,5),(3,6),(4,6)
-FT_BREAK_PAIRS = [(b1, b2) for b1 in range(2, 7) for b2 in range(b1 + 2, 7)]
+# Half-slot offsets within a 9-hour shift (18 half-slots total, 0..17).
+# Break 1 (bs1): ≥ 4 (after first 2 h), Break 2 (bs2): ≤ 13 (before last 2 h).
+# Must be at least 4 half-slots (= 2 h) apart.
+# 21 valid pairs: (4,8),(4,9),…,(9,13)
+FT_BREAK_HALF_SLOTS = [
+    (bs1, bs2)
+    for bs1 in range(4, 14)
+    for bs2 in range(bs1 + 4, 14)
+]
 
 MON_FRI  = [0, 1, 2, 3, 4]
 ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
 
 
-def ft_hours_raw(s, b1, b2):
-    """All productive hours for FT (may include values ≥ 24 for overnight).
-    Excludes two 1-hour break slots at offsets b1 and b2 from shift start,
-    yielding 7 productive hours per shift day."""
-    return [s + i for i in range(9) if i != b1 and i != b2]
-
-
-def ft_hours(s, b1, b2):
-    """Same-day productive hours for FT (values < 24 only)."""
-    return [h for h in ft_hours_raw(s, b1, b2) if h < 24]
+def ft_coverage(s, bs1, bs2):
+    """Return {raw_hour: contribution} for an FT/WFT shift starting at s.
+    raw_hour may be ≥ 24 for overnight shifts.
+    contribution = 2 for a fully productive hour, 1 if one 30-min break
+    falls within that hour (scaled by 2 for integer coverage constraints)."""
+    result = {}
+    for shift_h in range(9):
+        raw_h = s + shift_h
+        hs0 = 2 * shift_h        # :00 half-slot offset within shift
+        hs1 = 2 * shift_h + 1    # :30 half-slot offset within shift
+        contrib = 2
+        if bs1 in (hs0, hs1):
+            contrib -= 1
+        if bs2 in (hs0, hs1):
+            contrib -= 1
+        result[raw_h] = contrib  # always > 0 (each hour has ≤ 1 break half-slot)
+    return result
 
 
 def pt_hours(s):
@@ -63,9 +86,10 @@ def solve(inp):
     day_off_days = ALL_DAYS if config["allowWeekendDayOff"] else MON_FRI
 
     # ── Pre-filter: only keep variables that cover ≥1 demand slot ─────────────
-    def is_active_ft(s, p, b1, b2):
-        same = ft_hours(s, b1, b2)
-        nxt  = [h - 24 for h in ft_hours_raw(s, b1, b2) if h >= 24]
+    def is_active_ft(s, p, bs1, bs2):
+        cov = ft_coverage(s, bs1, bs2)
+        same = [h for h in cov if h < 24]
+        nxt  = [h - 24 for h in cov if h >= 24]
         for d in ALL_DAYS:
             if d == p:
                 continue
@@ -81,18 +105,18 @@ def solve(inp):
         hrs = pt_hours(s)
         return any(oph[d][h] > 0 for d in ALL_DAYS if d != p for h in hrs)
 
-    def is_active_wft(s, b1, b2):
-        return any(oph[d][h] > 0 for d in [5, 6] for h in ft_hours(s, b1, b2))
+    def is_active_wft(s, bs1, bs2):
+        cov = ft_coverage(s, bs1, bs2)
+        same = [h for h in cov if h < 24]
+        return any(oph[d][h] > 0 for d in [5, 6] for h in same)
 
     def is_active_wpt(s):
         return any(oph[d][h] > 0 for d in [5, 6] for h in pt_hours(s))
 
     # ── Break-placement constraint for FT / WFT ───────────────────────────────
-    # An FT/WFT worker's break must NOT fall at the peak demand hour within
-    # their shift, nor in the hour immediately before or after that peak.
-    # "Peak" = highest-demand hour in the 9-hour shift window on a given day.
-    # Because the break offset is the same on every working day, a config is
-    # rejected if the break is too close to the peak on ANY of the worker's days.
+    # Neither break half-slot may fall within ±1 h of the peak demand hour in
+    # the shift window on any of the worker's working days.
+    # Comparison is done in half-slot units: ±1 h = ±2 half-slots.
 
     def shift_peak_hours(d, s):
         """Raw hours (may be ≥ 24) with maximum demand in shift [s, s+9) on day d."""
@@ -107,36 +131,43 @@ def solve(inp):
                 peaks.append(h_raw)
         return peaks  # empty if no demand in window
 
-    def is_break_valid_ft(s, p, b1, b2):
-        """True iff neither break (s+b1, s+b2) is within ±1 of the peak on any working day."""
-        for b in (b1, b2):
-            break_raw = s + b
+    def is_break_valid_ft(s, p, bs1, bs2):
+        """True iff neither break is within ±1 h of the peak on any working day.
+        Break time (absolute half-slots) = 2*s + bs.
+        Peak time (absolute half-slots) = 2*peak_h.
+        ±1 h = ±2 half-slots."""
+        for bs in (bs1, bs2):
+            break_hs = 2 * s + bs
             for d in ALL_DAYS:
                 if d == p:
                     continue
                 for peak_h in shift_peak_hours(d, s):
-                    if abs(break_raw - peak_h) <= 1:
+                    if abs(break_hs - 2 * peak_h) <= 2:
                         return False
         return True
 
-    def is_break_valid_wft(s, b1, b2):
-        """Same rule for WFT (works Sat=5 and Sun=6 only)."""
-        for b in (b1, b2):
-            break_raw = s + b
+    def is_break_valid_wft(s, bs1, bs2):
+        """Same rule for WFT (works Sat=5, Sun=6 only)."""
+        for bs in (bs1, bs2):
+            break_hs = 2 * s + bs
             for d in [5, 6]:
                 for peak_h in shift_peak_hours(d, s):
-                    if abs(break_raw - peak_h) <= 1:
+                    if abs(break_hs - 2 * peak_h) <= 2:
                         return False
         return True
 
-    ft_keys  = [(s, p, b1, b2) for s in FT_STARTS for p in day_off_days
-                for (b1, b2) in FT_BREAK_PAIRS
-                if is_active_ft(s, p, b1, b2) and is_break_valid_ft(s, p, b1, b2)]
+    ft_keys  = [(s, p, bs1, bs2) for s in FT_STARTS for p in day_off_days
+                for (bs1, bs2) in FT_BREAK_HALF_SLOTS
+                if is_active_ft(s, p, bs1, bs2) and is_break_valid_ft(s, p, bs1, bs2)]
     pt_keys  = [(s, p) for s in PT_STARTS for p in day_off_days
                 if use_pt and is_active_pt(s, p)]
-    wft_keys = [(s, b1, b2) for s in WFT_STARTS for (b1, b2) in FT_BREAK_PAIRS
-                if use_wft and is_active_wft(s, b1, b2) and is_break_valid_wft(s, b1, b2)]
+    wft_keys = [(s, bs1, bs2) for s in WFT_STARTS for (bs1, bs2) in FT_BREAK_HALF_SLOTS
+                if use_wft and is_active_wft(s, bs1, bs2) and is_break_valid_wft(s, bs1, bs2)]
     wpt_keys = [s for s in PT_STARTS if use_wpt and is_active_wpt(s)]
+
+    # Pre-compute coverage dicts (avoid recomputing in nested loops)
+    ft_cov  = {k: ft_coverage(k[0], k[2], k[3]) for k in ft_keys}
+    wft_cov = {k: ft_coverage(k[0], k[1], k[2]) for k in wft_keys}
 
     # ── Build CP-SAT model ────────────────────────────────────────────────────
     model   = cp_model.CpModel()
@@ -147,46 +178,50 @@ def solve(inp):
     xWFT = {k: model.new_int_var(0, MAX_CNT, f"xWFT_{k[0]}_{k[1]}_{k[2]}")       for k in wft_keys}
     xWPT = {s: model.new_int_var(0, MAX_CNT, f"xWPT_{s}")                         for s in wpt_keys}
 
-    # ── Coverage constraints ──────────────────────────────────────────────────
+    # ── Coverage constraints (scaled ×2) ──────────────────────────────────────
+    # required_scaled = 2 × ceil(oph / rate)
+    # FT/WFT fully productive hour   → contributes 2 × var
+    # FT/WFT break-containing hour   → contributes 1 × var  (30 min of work)
+    # PT/WPT (no breaks)             → contributes 2 × var
     for d in range(7):
         for h in range(24):
             demand = oph[d][h]
             if demand <= 0:
                 continue
-            required = math.ceil(demand / rate)
+            required_scaled = 2 * math.ceil(demand / rate)
             terms = []
 
             # FT same-day
-            for (s, p, b1, b2), var in xFT.items():
-                if d != p and h in ft_hours(s, b1, b2):
-                    terms.append(var)
+            for k, var in xFT.items():
+                s, p, _, _ = k
+                if d != p and h in ft_cov[k]:
+                    terms.append(ft_cov[k][h] * var)
 
             # FT overnight: shift started on prev_day, hour wraps into day d
             prev_day = (d - 1) % 7
-            for (s, p, b1, b2), var in xFT.items():
-                if s < 20:
+            for k, var in xFT.items():
+                s, p, _, _ = k
+                if s < 20 or p == prev_day:
                     continue
-                if p == prev_day:
-                    continue
-                if (h + 24) in ft_hours_raw(s, b1, b2):
-                    terms.append(var)
+                if (h + 24) in ft_cov[k]:
+                    terms.append(ft_cov[k][h + 24] * var)
 
-            # PT (no overnight)
+            # PT (no overnight, no breaks → full contribution 2)
             for (s, p), var in xPT.items():
                 if d != p and h in pt_hours(s):
-                    terms.append(var)
+                    terms.append(2 * var)
 
             # Weekenders (Sat=5, Sun=6 only)
             if d in (5, 6):
-                for (s, b1, b2), var in xWFT.items():
-                    if h in ft_hours(s, b1, b2):
-                        terms.append(var)
+                for k, var in xWFT.items():
+                    if h in wft_cov[k]:
+                        terms.append(wft_cov[k][h] * var)
                 for s, var in xWPT.items():
                     if h in pt_hours(s):
-                        terms.append(var)
+                        terms.append(2 * var)
 
             if terms:
-                model.add(sum(terms) >= required)
+                model.add(sum(terms) >= required_scaled)
 
     # ── Cap constraints ───────────────────────────────────────────────────────
     if use_pt and cap_pt < 100:
@@ -207,7 +242,7 @@ def solve(inp):
                 (100 - cap_wk) * sum(wk_sum) <= cap_wk * sum(wd_sum)
             )
 
-    # ── Objective: minimise total paid hours ─────────────────────────────────
+    # ── Objective: minimise total paid hours ──────────────────────────────────
     # FT/WFT: 8 productive hours/day → weight 2
     # PT/WPT: 4 productive hours/day → weight 1
     obj = []
@@ -244,14 +279,17 @@ def solve(inp):
     wid = 1
     ft_count = pt_count = wft_count = wpt_count = 0
 
-    for (s, p, b1, b2), var in xFT.items():
+    for k, var in xFT.items():
+        s, p, bs1, bs2 = k
         for _ in range(solver.value(var)):
+            cov = ft_cov[k]
             workers.append({
                 "id": wid, "type": "FT",
                 "shiftStart": s, "shiftEnd": s + 9,
                 "dayOff": p,
-                "productiveHours": [h % 24 for h in ft_hours_raw(s, b1, b2)],
-                "breakOffsets": [b1, b2],
+                # All 9 shift hours appear in productiveHours (each has ≥30 min worked)
+                "productiveHours": sorted(h for h in cov if h < 24),
+                "breakHalfSlots": [bs1, bs2],
             })
             wid += 1; ft_count += 1
 
@@ -265,14 +303,16 @@ def solve(inp):
             })
             wid += 1; pt_count += 1
 
-    for (s, b1, b2), var in xWFT.items():
+    for k, var in xWFT.items():
+        s, bs1, bs2 = k
         for _ in range(solver.value(var)):
+            cov = wft_cov[k]
             workers.append({
                 "id": wid, "type": "WFT",
                 "shiftStart": s, "shiftEnd": s + 9,
                 "dayOff": None,
-                "productiveHours": ft_hours(s, b1, b2),
-                "breakOffsets": [b1, b2],
+                "productiveHours": sorted(h for h in cov if h < 24),
+                "breakHalfSlots": [bs1, bs2],
             })
             wid += 1; wft_count += 1
 

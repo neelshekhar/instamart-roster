@@ -27,8 +27,10 @@ export interface WorkerSlot {
   dayOff: DayIndex | null;
   /** Productive hours on each active day */
   productiveHours: number[];
-  /** Break offsets from shiftStart (FT/WFT only): two values, each in [2,6] */
-  breakOffsets?: number[];
+  /** Break half-slot offsets within shift (FT/WFT only): two values in [4,13].
+   *  Half-slot 0 = shiftStart:00-:30, 1 = shiftStart:30-next:00, etc.
+   *  Each break is 30 min; total break = 1 h. */
+  breakHalfSlots?: number[];
 }
 
 export interface SolverInput {

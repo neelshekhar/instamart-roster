@@ -196,19 +196,9 @@ export function RosterTable({ result, config }: RosterTableProps) {
 
 // ── Shift Gantt ───────────────────────────────────────────────────────────────
 
-/**
- * For FT/WFT workers, find the raw break hours within [shiftStart, shiftEnd).
- * productiveHours is stored mod-24, so we compare rawHour % 24.
- * Returns up to two break hours (staggered model).
- */
-function findBreakHours(w: WorkerSlot): number[] {
-  if (w.type !== "FT" && w.type !== "WFT") return [];
-  const prodSet = new Set(w.productiveHours);
-  const breaks: number[] = [];
-  for (let raw = w.shiftStart; raw < w.shiftEnd; raw++) {
-    if (!prodSet.has(raw % 24)) breaks.push(raw);
-  }
-  return breaks;
+/** Break half-slot set for a worker — empty for PT/WPT. */
+function breakHalfSlotSet(w: WorkerSlot): Set<number> {
+  return new Set(w.breakHalfSlots ?? []);
 }
 
 const SLOT_W = 13; // px — width of each 30-min block
@@ -277,8 +267,7 @@ function ShiftGantt({ workers }: { workers: WorkerSlot[] }) {
           {/* Worker rows */}
           <div className="flex flex-col gap-[3px] mt-2">
             {workers.map((w) => {
-              const breakHours = findBreakHours(w);
-              const breakSet = new Set(breakHours);
+              const bhs = breakHalfSlotSet(w);  // half-slot offsets within shift
               const isWeekender = w.type === "WFT" || w.type === "WPT";
 
               return (
@@ -314,24 +303,20 @@ function ShiftGantt({ workers }: { workers: WorkerSlot[] }) {
                     {Array.from({ length: totalHours }, (_, hi) => {
                       const rawH = rangeStart + hi;
                       const inShift = rawH >= w.shiftStart && rawH < w.shiftEnd;
-                      const isBreak = breakSet.has(rawH);
 
-                      // Each hour = 2 half-hour blocks side by side.
-                      // For break hours: first half (":00") stays working (emerald),
-                      // second half (":30") shows break (blue) — staggered 30-min break.
                       return (
                         <div key={hi} className="flex gap-px mr-[1px]">
                           {[0, 1].map((half) => {
+                            // half-slot offset within the shift for this block
+                            const shiftHalfSlot = 2 * (rawH - w.shiftStart) + half;
+                            const isBreakHalf = inShift && bhs.has(shiftHalfSlot);
+
                             let blockColor: string;
-                            if (!inShift) {
-                              blockColor = "bg-gray-100";
-                            } else if (isBreak && half === 1) {
-                              blockColor = "bg-blue-400";
-                            } else {
-                              blockColor = "bg-emerald-400";
-                            }
-                            const label = isBreak
-                              ? half === 0 ? "Working" : "Break (30 min)"
+                            if (!inShift)       blockColor = "bg-gray-100";
+                            else if (isBreakHalf) blockColor = "bg-blue-400";
+                            else                blockColor = "bg-emerald-400";
+
+                            const label = isBreakHalf ? "Break (30 min)"
                               : inShift ? "Working" : "Off shift";
                             return (
                               <div
