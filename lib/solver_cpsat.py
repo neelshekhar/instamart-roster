@@ -19,10 +19,11 @@ Break model for FT / WFT:
     • Break 1 (bs1): half-slot ≥ 4  (after first 2 h = 4 half-slots)
     • Break 2 (bs2): half-slot ≤ 13 (before last 2 h; slot 14 starts at 7 h)
     • bs2 ≥ bs1 + 4  (at least 2 h = 4 half-slots apart)
-  Coverage: the coverage constraint is scaled ×2.  A fully productive hour
-  contributes 2; an hour that contains one break half-slot contributes 1
-  (worker is still productive for the other 30 min of that hour).
-  Net productive time: 7 × 60 + 2 × 30 = 480 min = 8 h  ✓
+  Coverage: constraints operate at the 30-min half-slot level (2 constraints
+  per demand hour).  A worker covers a half-slot if and only if they are not
+  on break during it.  Required headcount must be met at every half-slot
+  independently — no fractional contributions.
+  Net productive time: 16 productive half-slots × 30 min = 480 min = 8 h  ✓
 """
 
 import json
@@ -53,8 +54,9 @@ ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
 def ft_coverage(s, bs1, bs2):
     """Return {raw_hour: contribution} for an FT/WFT shift starting at s.
     raw_hour may be ≥ 24 for overnight shifts.
-    contribution = 2 for a fully productive hour, 1 if one 30-min break
-    falls within that hour (scaled by 2 for integer coverage constraints)."""
+    Used to enumerate which hours the shift occupies (for is_active and
+    productiveHours output). The contribution values are not used by the
+    coverage constraints (which operate at the half-slot level)."""
     result = {}
     for shift_h in range(9):
         raw_h = s + shift_h
@@ -178,50 +180,59 @@ def solve(inp):
     xWFT = {k: model.new_int_var(0, MAX_CNT, f"xWFT_{k[0]}_{k[1]}_{k[2]}")       for k in wft_keys}
     xWPT = {s: model.new_int_var(0, MAX_CNT, f"xWPT_{s}")                         for s in wpt_keys}
 
-    # ── Coverage constraints (scaled ×2) ──────────────────────────────────────
-    # required_scaled = 2 × ceil(oph / rate)
-    # FT/WFT fully productive hour   → contributes 2 × var
-    # FT/WFT break-containing hour   → contributes 1 × var  (30 min of work)
-    # PT/WPT (no breaks)             → contributes 2 × var
+    # ── Coverage constraints (per 30-min half-slot) ──────────────────────────
+    # Headcount must meet ceil(oph/rate) at EVERY 30-min window independently.
+    # A worker either covers a half-slot (productive) or doesn't (on break).
+    # No scaling — binary contribution per half-slot per worker.
+    # Two constraints per demand hour: one for :00 half, one for :30 half.
     for d in range(7):
         for h in range(24):
             demand = oph[d][h]
             if demand <= 0:
                 continue
-            required_scaled = 2 * math.ceil(demand / rate)
-            terms = []
+            required = math.ceil(demand / rate)
 
-            # FT same-day
-            for k, var in xFT.items():
-                s, p, _, _ = k
-                if d != p and h in ft_cov[k]:
-                    terms.append(ft_cov[k][h] * var)
+            for half in range(2):  # 0 = :00-:30, 1 = :30-:00
+                abs_hs = 2 * h + half   # absolute half-slot within the day
+                terms = []
 
-            # FT overnight: shift started on prev_day, hour wraps into day d
-            prev_day = (d - 1) % 7
-            for k, var in xFT.items():
-                s, p, _, _ = k
-                if s < 20 or p == prev_day:
-                    continue
-                if (h + 24) in ft_cov[k]:
-                    terms.append(ft_cov[k][h + 24] * var)
+                # FT same-day: productive if this half-slot is not a break
+                for k, var in xFT.items():
+                    s, p, bs1, bs2 = k
+                    if d == p:
+                        continue
+                    shift_hs = abs_hs - 2 * s
+                    if 0 <= shift_hs <= 17 and shift_hs not in (bs1, bs2):
+                        terms.append(var)
 
-            # PT (no overnight, no breaks → full contribution 2)
-            for (s, p), var in xPT.items():
-                if d != p and h in pt_hours(s):
-                    terms.append(2 * var)
+                # FT overnight: shift started on prev_day, hour falls on day d
+                prev_day = (d - 1) % 7
+                for k, var in xFT.items():
+                    s, p, bs1, bs2 = k
+                    if s < 20 or p == prev_day:
+                        continue
+                    shift_hs = 2 * (h + 24 - s) + half
+                    if 0 <= shift_hs <= 17 and shift_hs not in (bs1, bs2):
+                        terms.append(var)
 
-            # Weekenders (Sat=5, Sun=6 only)
-            if d in (5, 6):
-                for k, var in xWFT.items():
-                    if h in wft_cov[k]:
-                        terms.append(wft_cov[k][h] * var)
-                for s, var in xWPT.items():
-                    if h in pt_hours(s):
-                        terms.append(2 * var)
+                # PT (no breaks — every half-slot in shift is productive)
+                for (s, p), var in xPT.items():
+                    if d != p and h in pt_hours(s):
+                        terms.append(var)
 
-            if terms:
-                model.add(sum(terms) >= required_scaled)
+                # Weekenders (Sat=5, Sun=6 only; WFT starts ≤ 15, all same-day)
+                if d in (5, 6):
+                    for k, var in xWFT.items():
+                        s, bs1, bs2 = k
+                        shift_hs = abs_hs - 2 * s
+                        if 0 <= shift_hs <= 17 and shift_hs not in (bs1, bs2):
+                            terms.append(var)
+                    for s, var in xWPT.items():
+                        if h in pt_hours(s):
+                            terms.append(var)
+
+                if terms:
+                    model.add(sum(terms) >= required)
 
     # ── Cap constraints ───────────────────────────────────────────────────────
     if use_pt and cap_pt < 100:
