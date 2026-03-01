@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { FileUpload } from "@/components/FileUpload";
@@ -29,6 +29,11 @@ export default function Home() {
   const [solving, setSolving] = useState(false);
   const [progress, setProgress] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+
+  // Fire-and-forget ping to warm the Vercel Python runtime before the user clicks Solve.
+  useEffect(() => {
+    fetch("/api/ping").catch(() => {});
+  }, []);
 
   const handleMatrixReady = useCallback((matrix: OphMatrix) => {
     setOph(matrix);
