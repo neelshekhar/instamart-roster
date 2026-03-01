@@ -201,8 +201,7 @@ function breakHalfSlotSet(w: WorkerSlot): Set<number> {
   return new Set(w.breakHalfSlots ?? []);
 }
 
-const SLOT_W = 13; // px — width of each 30-min block
-const SLOT_H = 20; // px — height of each block
+const SLOT_H = 20; // px — height of each 30-min block
 const LABEL_W = 152; // px — fixed left-label column width
 
 function fmtH(raw: number) {
@@ -244,116 +243,109 @@ function ShiftGantt({ workers }: { workers: WorkerSlot[] }) {
         </div>
       </div>
 
-      <div className="overflow-x-auto pb-2">
-        <div className="inline-flex flex-col">
+      <div className="w-full pb-2">
 
-          {/* Top time axis */}
-          <div className="flex items-end mb-1" style={{ marginLeft: LABEL_W }}>
-            {axisTicks.map((rawH, i) => (
-              <div
+        {/* Top time axis — labels placed at % positions matching flex-1 blocks */}
+        <div className="relative h-5 mb-1" style={{ marginLeft: LABEL_W }}>
+          {axisTicks.map((rawH, i) =>
+            i % 2 === 0 ? (
+              <span
                 key={i}
-                className="relative"
-                style={{ width: i < totalHours ? SLOT_W * 2 + 1 : 0 }}
+                className="absolute bottom-0 text-[9px] font-mono text-gray-400 select-none whitespace-nowrap -translate-x-1/2"
+                style={{ left: `${(i / totalHours) * 100}%` }}
               >
-                {i % 2 === 0 && (
-                  <span className="absolute left-0 -translate-x-1/2 text-[9px] font-mono text-gray-400 select-none whitespace-nowrap">
-                    {fmtH(rawH)}{rawH >= 24 ? "⁺" : ""}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Worker rows */}
-          <div className="flex flex-col gap-[3px] mt-2">
-            {workers.map((w) => {
-              const bhs = breakHalfSlotSet(w);  // half-slot offsets within shift
-              const isWeekender = w.type === "WFT" || w.type === "WPT";
-
-              return (
-                <div key={w.id} className="flex items-center">
-
-                  {/* Left label */}
-                  <div
-                    className="flex items-center gap-1.5 shrink-0 pr-2"
-                    style={{ width: LABEL_W }}
-                  >
-                    <span className="text-[11px] text-gray-400 w-8 text-right tabular-nums">
-                      #{w.id}
-                    </span>
-                    <Badge
-                      className={`text-[9px] px-1 py-0 h-[18px] leading-none shrink-0 ${TYPE_COLORS[w.type]}`}
-                      variant="outline"
-                    >
-                      {w.type}
-                    </Badge>
-                    <span className="text-[10px] text-gray-500 font-mono truncate">
-                      {fmtH(w.shiftStart)}–{fmtH(w.shiftEnd)}
-                      {w.shiftEnd > 24 && (
-                        <span className="text-gray-400">⁺</span>
-                      )}
-                    </span>
-                    {isWeekender && (
-                      <span className="text-[9px] text-gray-400 shrink-0">Sat–Sun</span>
-                    )}
-                  </div>
-
-                  {/* 30-min blocks grouped by hour */}
-                  <div className="flex gap-[1px]">
-                    {Array.from({ length: totalHours }, (_, hi) => {
-                      const rawH = rangeStart + hi;
-                      const inShift = rawH >= w.shiftStart && rawH < w.shiftEnd;
-
-                      return (
-                        <div key={hi} className="flex gap-px mr-[1px]">
-                          {[0, 1].map((half) => {
-                            // half-slot offset within the shift for this block
-                            const shiftHalfSlot = 2 * (rawH - w.shiftStart) + half;
-                            const isBreakHalf = inShift && bhs.has(shiftHalfSlot);
-
-                            let blockColor: string;
-                            if (!inShift)       blockColor = "bg-gray-100";
-                            else if (isBreakHalf) blockColor = "bg-blue-400";
-                            else                blockColor = "bg-emerald-400";
-
-                            const label = isBreakHalf ? "Break (30 min)"
-                              : inShift ? "Working" : "Off shift";
-                            return (
-                              <div
-                                key={half}
-                                className={`rounded-[2px] ${blockColor} transition-opacity hover:opacity-80`}
-                                style={{ width: SLOT_W, height: SLOT_H }}
-                                title={`${fmtH(rawH)}:${half === 0 ? "00" : "30"}${rawH >= 24 ? " (+1d)" : ""} — ${label}`}
-                              />
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Bottom time axis */}
-          <div className="flex items-start mt-1" style={{ marginLeft: LABEL_W }}>
-            {axisTicks.map((rawH, i) => (
-              <div
-                key={i}
-                className="relative"
-                style={{ width: i < totalHours ? SLOT_W * 2 + 1 : 0 }}
-              >
-                {i % 2 === 0 && (
-                  <span className="absolute left-0 -translate-x-1/2 text-[9px] font-mono text-gray-400 select-none whitespace-nowrap">
-                    {fmtH(rawH)}{rawH >= 24 ? "⁺" : ""}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-
+                {fmtH(rawH)}{rawH >= 24 ? "⁺" : ""}
+              </span>
+            ) : null
+          )}
         </div>
+
+        {/* Worker rows */}
+        <div className="flex flex-col gap-[3px] mt-2">
+          {workers.map((w) => {
+            const bhs = breakHalfSlotSet(w);
+            const isWeekender = w.type === "WFT" || w.type === "WPT";
+
+            return (
+              <div key={w.id} className="flex items-center w-full">
+
+                {/* Left label */}
+                <div
+                  className="flex items-center gap-1.5 shrink-0 pr-2"
+                  style={{ width: LABEL_W }}
+                >
+                  <span className="text-[11px] text-gray-400 w-8 text-right tabular-nums">
+                    #{w.id}
+                  </span>
+                  <Badge
+                    className={`text-[9px] px-1 py-0 h-[18px] leading-none shrink-0 ${TYPE_COLORS[w.type]}`}
+                    variant="outline"
+                  >
+                    {w.type}
+                  </Badge>
+                  <span className="text-[10px] text-gray-500 font-mono truncate">
+                    {fmtH(w.shiftStart)}–{fmtH(w.shiftEnd)}
+                    {w.shiftEnd > 24 && (
+                      <span className="text-gray-400">⁺</span>
+                    )}
+                  </span>
+                  {isWeekender && (
+                    <span className="text-[9px] text-gray-400 shrink-0">Sat–Sun</span>
+                  )}
+                </div>
+
+                {/* 30-min blocks — each hour group is flex-1, each half-block is flex-1 */}
+                <div className="flex flex-1 min-w-0">
+                  {Array.from({ length: totalHours }, (_, hi) => {
+                    const rawH = rangeStart + hi;
+                    const inShift = rawH >= w.shiftStart && rawH < w.shiftEnd;
+
+                    return (
+                      <div key={hi} className="flex flex-1 gap-px px-px">
+                        {[0, 1].map((half) => {
+                          const shiftHalfSlot = 2 * (rawH - w.shiftStart) + half;
+                          const isBreakHalf = inShift && bhs.has(shiftHalfSlot);
+
+                          let blockColor: string;
+                          if (!inShift)         blockColor = "bg-gray-100";
+                          else if (isBreakHalf) blockColor = "bg-blue-400";
+                          else                  blockColor = "bg-emerald-400";
+
+                          const label = isBreakHalf ? "Break (30 min)"
+                            : inShift ? "Working" : "Off shift";
+                          return (
+                            <div
+                              key={half}
+                              className={`flex-1 rounded-[2px] ${blockColor} transition-opacity hover:opacity-80`}
+                              style={{ height: SLOT_H }}
+                              title={`${fmtH(rawH)}:${half === 0 ? "00" : "30"}${rawH >= 24 ? " (+1d)" : ""} — ${label}`}
+                            />
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Bottom time axis */}
+        <div className="relative h-5 mt-1" style={{ marginLeft: LABEL_W }}>
+          {axisTicks.map((rawH, i) =>
+            i % 2 === 0 ? (
+              <span
+                key={i}
+                className="absolute top-0 text-[9px] font-mono text-gray-400 select-none whitespace-nowrap -translate-x-1/2"
+                style={{ left: `${(i / totalHours) * 100}%` }}
+              >
+                {fmtH(rawH)}{rawH >= 24 ? "⁺" : ""}
+              </span>
+            ) : null
+          )}
+        </div>
+
       </div>
     </div>
   );
