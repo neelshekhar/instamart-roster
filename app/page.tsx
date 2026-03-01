@@ -68,7 +68,7 @@ export default function Home() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-gray-900">Instamart Roster Optimizer</h1>
             <p className="text-sm text-gray-500">ILP-based weekly picker scheduling · minimises total labour hours</p>
@@ -100,7 +100,7 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Step 1: Upload */}
         {step === "upload" && (
           <div className="space-y-4">
@@ -213,7 +213,7 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer className="max-w-5xl mx-auto px-4 py-8 text-center text-xs text-gray-400">
+      <footer className="max-w-7xl mx-auto px-4 py-8 text-center text-xs text-gray-400">
         Solved by Google OR-Tools CP-SAT · Minimises total paid hours · Built by Neelshekhar
       </footer>
     </div>

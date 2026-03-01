@@ -27,6 +27,8 @@ export interface WorkerSlot {
   dayOff: DayIndex | null;
   /** Productive hours on each active day */
   productiveHours: number[];
+  /** Break offsets from shiftStart (FT/WFT only): two values, each in [2,6] */
+  breakOffsets?: number[];
 }
 
 export interface SolverInput {

@@ -197,16 +197,18 @@ export function RosterTable({ result, config }: RosterTableProps) {
 // ── Shift Gantt ───────────────────────────────────────────────────────────────
 
 /**
- * For FT/WFT workers, find the raw break hour within [shiftStart, shiftEnd).
+ * For FT/WFT workers, find the raw break hours within [shiftStart, shiftEnd).
  * productiveHours is stored mod-24, so we compare rawHour % 24.
+ * Returns up to two break hours (staggered model).
  */
-function findBreakHour(w: WorkerSlot): number | null {
-  if (w.type !== "FT" && w.type !== "WFT") return null;
+function findBreakHours(w: WorkerSlot): number[] {
+  if (w.type !== "FT" && w.type !== "WFT") return [];
   const prodSet = new Set(w.productiveHours);
+  const breaks: number[] = [];
   for (let raw = w.shiftStart; raw < w.shiftEnd; raw++) {
-    if (!prodSet.has(raw % 24)) return raw;
+    if (!prodSet.has(raw % 24)) breaks.push(raw);
   }
-  return null;
+  return breaks;
 }
 
 const SLOT_W = 13; // px — width of each 30-min block
@@ -234,7 +236,7 @@ function ShiftGantt({ workers }: { workers: WorkerSlot[] }) {
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-gray-700">
           Shift Timeline&ensp;
-          <span className="font-normal text-gray-400 text-xs">30-min blocks · current page</span>
+          <span className="font-normal text-gray-400 text-xs">30-min blocks · FT/WFT have 2 staggered breaks · current page</span>
         </h3>
         <div className="flex items-center gap-4 text-xs text-gray-500">
           <span className="flex items-center gap-1.5">
@@ -243,7 +245,7 @@ function ShiftGantt({ workers }: { workers: WorkerSlot[] }) {
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-3.5 h-3.5 rounded-[3px] bg-blue-400" />
-            Break
+            Break (30 min)
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-3.5 h-3.5 rounded-[3px] bg-gray-100 border border-gray-200" />
@@ -275,7 +277,8 @@ function ShiftGantt({ workers }: { workers: WorkerSlot[] }) {
           {/* Worker rows */}
           <div className="flex flex-col gap-[3px] mt-2">
             {workers.map((w) => {
-              const breakHour = findBreakHour(w);
+              const breakHours = findBreakHours(w);
+              const breakSet = new Set(breakHours);
               const isWeekender = w.type === "WFT" || w.type === "WPT";
 
               return (
@@ -311,25 +314,34 @@ function ShiftGantt({ workers }: { workers: WorkerSlot[] }) {
                     {Array.from({ length: totalHours }, (_, hi) => {
                       const rawH = rangeStart + hi;
                       const inShift = rawH >= w.shiftStart && rawH < w.shiftEnd;
-                      const isBreak = breakHour !== null && rawH === breakHour;
+                      const isBreak = breakSet.has(rawH);
 
-                      let blockColor: string;
-                      if (!inShift)     blockColor = "bg-gray-100";
-                      else if (isBreak) blockColor = "bg-blue-400";
-                      else              blockColor = "bg-emerald-400";
-
-                      // Each hour = 2 half-hour blocks side by side, separated by 1px,
-                      // then a slightly larger 2px gap to the next hour.
+                      // Each hour = 2 half-hour blocks side by side.
+                      // For break hours: first half (":00") stays working (emerald),
+                      // second half (":30") shows break (blue) — staggered 30-min break.
                       return (
                         <div key={hi} className="flex gap-px mr-[1px]">
-                          {[0, 1].map((half) => (
-                            <div
-                              key={half}
-                              className={`rounded-[2px] ${blockColor} transition-opacity hover:opacity-80`}
-                              style={{ width: SLOT_W, height: SLOT_H }}
-                              title={`${fmtH(rawH)}:${half === 0 ? "00" : "30"}${rawH >= 24 ? " (+1d)" : ""} — ${isBreak ? "Break" : inShift ? "Working" : "Off shift"}`}
-                            />
-                          ))}
+                          {[0, 1].map((half) => {
+                            let blockColor: string;
+                            if (!inShift) {
+                              blockColor = "bg-gray-100";
+                            } else if (isBreak && half === 1) {
+                              blockColor = "bg-blue-400";
+                            } else {
+                              blockColor = "bg-emerald-400";
+                            }
+                            const label = isBreak
+                              ? half === 0 ? "Working" : "Break (30 min)"
+                              : inShift ? "Working" : "Off shift";
+                            return (
+                              <div
+                                key={half}
+                                className={`rounded-[2px] ${blockColor} transition-opacity hover:opacity-80`}
+                                style={{ width: SLOT_W, height: SLOT_H }}
+                                title={`${fmtH(rawH)}:${half === 0 ? "00" : "30"}${rawH >= 24 ? " (+1d)" : ""} — ${label}`}
+                              />
+                            );
+                          })}
                         </div>
                       );
                     })}

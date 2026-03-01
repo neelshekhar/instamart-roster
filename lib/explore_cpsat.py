@@ -174,27 +174,24 @@ def print_shift_distribution(result):
 
 
 def print_break_audit(result, oph, rate):
-    """Show each unique FT/WFT shift config: break hour vs peak in window."""
+    """Show each unique FT/WFT shift config: break hours vs peak in window."""
     from collections import Counter
     configs = Counter()
     for w in result["workers"]:
         if w["type"] not in ("FT", "WFT"):
             continue
         s = w["shiftStart"]
-        # Productive hours stored mod-24; break is the missing hour in [s, s+9)
-        prod_set = set(w["productiveHours"])
-        shift_hrs = [s + i for i in range(9)]
-        break_h = next((h for h in shift_hrs if h % 24 not in prod_set), None)
-        configs[(w["type"], s, break_h)] += 1
+        offsets = tuple(w.get("breakOffsets", []))
+        configs[(w["type"], s, offsets)] += 1
 
     if not configs:
         return
 
-    print("\n  BREAK AUDIT (FT/WFT)  — break must not be within ±1 of peak")
-    print(f"  {'Type':<5} {'Shift':>6}  {'Break':>6}  {'Peak(s) in window':>20}  {'OK?':>4}  Count")
-    print("  " + "-" * 65)
+    print("\n  BREAK AUDIT (FT/WFT)  — breaks must not be within ±1 of peak")
+    print(f"  {'Type':<5} {'Shift':>6}  {'Break1':>6}  {'Break2':>6}  {'Peak(s) in window':>20}  {'OK?':>4}  Count")
+    print("  " + "-" * 75)
 
-    for (wtype, s, break_raw), count in sorted(configs.items()):
+    for (wtype, s, offsets), count in sorted(configs.items()):
         # Find peak in shift window on each active day
         active_days = [5, 6] if wtype == "WFT" else list(range(7))
         all_peaks = set()
@@ -211,19 +208,23 @@ def print_break_audit(result, oph, rate):
                 if dem == best and dem > 0:
                     all_peaks.add(h_raw % 24)
 
-        if break_raw is None:
+        if not offsets:
             ok = "?"
+            b1_str = b2_str = "?"
         else:
-            conflict = any(abs(break_raw - ph) <= 1 for ph in
-                           [s + off for off in range(9)
-                            if max(oph[d][s+off] if s+off < 24 else oph[(d+1)%7][(s+off)-24]
-                                   for d in ([5,6] if wtype=="WFT" else range(7))) > 0
-                            and (s + off) % 24 in all_peaks])
+            b1_raw, b2_raw = s + offsets[0], s + offsets[1]
+            conflict = any(
+                abs(b_raw - peak_h) <= 1
+                for b_raw in (b1_raw, b2_raw)
+                for peak_h in [s + off for off in range(9)
+                               if (s + off) % 24 in all_peaks]
+            )
             ok = "✓" if not conflict else "✗"
+            b1_str = fmt_hours(b1_raw % 24)
+            b2_str = fmt_hours(b2_raw % 24)
 
         peaks_str = ",".join(fmt_hours(h) for h in sorted(all_peaks)) or "none"
-        break_str = fmt_hours(break_raw % 24) if break_raw is not None else "?"
-        print(f"  {wtype:<5} {fmt_hours(s):>6}  {break_str:>6}  {peaks_str:>20}  {ok:>4}  {count}")
+        print(f"  {wtype:<5} {fmt_hours(s):>6}  {b1_str:>6}  {b2_str:>6}  {peaks_str:>20}  {ok:>4}  {count}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
