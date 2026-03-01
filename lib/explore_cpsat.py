@@ -33,19 +33,55 @@ TYPES = ["FT", "PT", "WFT", "WPT"]
 
 # ── Built-in sample: a typical Instamart dark-store pattern ──────────────────
 def sample_input():
+    """
+    Realistic Instamart dark-store demand with clear hour-by-hour variation.
+    Weekdays: morning peak at 09:00, evening peak at 18:00.
+    Weekends: late-morning peak at 11:00, evening peak at 18:00.
+    (OPH values produce whole-number required headcounts at rate=20.)
+    """
     oph = [[0] * 24 for _ in range(7)]
-    # Weekday demand: morning rush 8–12, evening rush 17–21
-    for d in range(5):  # Mon–Fri
-        for h in range(8, 13):
-            oph[d][h] = 120   # 6 workers @ rate 20
-        for h in range(17, 22):
-            oph[d][h] = 160   # 8 workers
-        for h in range(13, 17):
-            oph[d][h] = 60    # 3 workers (afternoon lull)
-    # Weekend: lighter but all-day
-    for d in range(5, 7):  # Sat–Sun
-        for h in range(9, 21):
-            oph[d][h] = 80    # 4 workers
+
+    # Weekday (Mon–Fri)
+    weekday = {
+        7: 20,   # 1 worker ramp-up
+        8: 60,   # 3
+        9: 140,  # 7  ← morning peak
+        10: 100, # 5
+        11: 80,  # 4
+        12: 80,  # 4
+        13: 60,  # 3
+        14: 40,  # 2
+        15: 40,  # 2
+        16: 60,  # 3
+        17: 100, # 5
+        18: 160, # 8  ← evening peak
+        19: 120, # 6
+        20: 80,  # 4
+        21: 40,  # 2
+    }
+    for d in range(5):
+        for h, v in weekday.items():
+            oph[d][h] = v
+
+    # Weekend (Sat–Sun)
+    weekend = {
+        9:  40,  # 2
+        10: 80,  # 4
+        11: 120, # 6  ← late-morning peak
+        12: 100, # 5
+        13: 80,  # 4
+        14: 60,  # 3
+        15: 60,  # 3
+        16: 80,  # 4
+        17: 100, # 5
+        18: 140, # 7  ← evening peak
+        19: 100, # 5
+        20: 60,  # 3
+    }
+    for d in range(5, 7):
+        for h, v in weekend.items():
+            oph[d][h] = v
+
     return {
         "oph": oph,
         "config": {
@@ -137,6 +173,59 @@ def print_shift_distribution(result):
         print(f"  {wtype:<5} {fmt_hours(s):>6}  {'█' * count} {count}")
 
 
+def print_break_audit(result, oph, rate):
+    """Show each unique FT/WFT shift config: break hour vs peak in window."""
+    from collections import Counter
+    configs = Counter()
+    for w in result["workers"]:
+        if w["type"] not in ("FT", "WFT"):
+            continue
+        s = w["shiftStart"]
+        # Productive hours stored mod-24; break is the missing hour in [s, s+9)
+        prod_set = set(w["productiveHours"])
+        shift_hrs = [s + i for i in range(9)]
+        break_h = next((h for h in shift_hrs if h % 24 not in prod_set), None)
+        configs[(w["type"], s, break_h)] += 1
+
+    if not configs:
+        return
+
+    print("\n  BREAK AUDIT (FT/WFT)  — break must not be within ±1 of peak")
+    print(f"  {'Type':<5} {'Shift':>6}  {'Break':>6}  {'Peak(s) in window':>20}  {'OK?':>4}  Count")
+    print("  " + "-" * 65)
+
+    for (wtype, s, break_raw), count in sorted(configs.items()):
+        # Find peak in shift window on each active day
+        active_days = [5, 6] if wtype == "WFT" else list(range(7))
+        all_peaks = set()
+        for d in active_days:
+            best = 0
+            for offset in range(9):
+                h_raw = s + offset
+                dem = oph[d][h_raw] if h_raw < 24 else oph[(d + 1) % 7][h_raw - 24]
+                if dem > best:
+                    best = dem
+            for offset in range(9):
+                h_raw = s + offset
+                dem = oph[d][h_raw] if h_raw < 24 else oph[(d + 1) % 7][h_raw - 24]
+                if dem == best and dem > 0:
+                    all_peaks.add(h_raw % 24)
+
+        if break_raw is None:
+            ok = "?"
+        else:
+            conflict = any(abs(break_raw - ph) <= 1 for ph in
+                           [s + off for off in range(9)
+                            if max(oph[d][s+off] if s+off < 24 else oph[(d+1)%7][(s+off)-24]
+                                   for d in ([5,6] if wtype=="WFT" else range(7))) > 0
+                            and (s + off) % 24 in all_peaks])
+            ok = "✓" if not conflict else "✗"
+
+        peaks_str = ",".join(fmt_hours(h) for h in sorted(all_peaks)) or "none"
+        break_str = fmt_hours(break_raw % 24) if break_raw is not None else "?"
+        print(f"  {wtype:<5} {fmt_hours(s):>6}  {break_str:>6}  {peaks_str:>20}  {ok:>4}  {count}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     verbose = "--verbose" in sys.argv
@@ -162,6 +251,7 @@ def main():
     if verbose and result["status"] in ("optimal", "feasible"):
         print_coverage_grid(result)
         print_shift_distribution(result)
+        print_break_audit(result, inp["oph"], config["productivityRate"])
 
     print()
 

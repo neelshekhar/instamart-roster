@@ -79,12 +79,53 @@ def solve(inp):
     def is_active_wpt(s):
         return any(oph[d][h] > 0 for d in [5, 6] for h in pt_hours(s))
 
+    # ── Break-placement constraint for FT / WFT ───────────────────────────────
+    # An FT/WFT worker's break must NOT fall at the peak demand hour within
+    # their shift, nor in the hour immediately before or after that peak.
+    # "Peak" = highest-demand hour in the 9-hour shift window on a given day.
+    # Because the break offset is the same on every working day, a config is
+    # rejected if the break is too close to the peak on ANY of the worker's days.
+
+    def shift_peak_hours(d, s):
+        """Raw hours (may be ≥ 24) with maximum demand in shift [s, s+9) on day d."""
+        best = 0
+        peaks = []
+        for offset in range(9):
+            h_raw = s + offset
+            dem = oph[d][h_raw] if h_raw < 24 else oph[(d + 1) % 7][h_raw - 24]
+            if dem > best:
+                best, peaks = dem, [h_raw]
+            elif dem == best and dem > 0:
+                peaks.append(h_raw)
+        return peaks  # empty if no demand in window
+
+    def is_break_valid_ft(s, p, b):
+        """True iff break at s+b is not within ±1 of the peak on any working day."""
+        break_raw = s + b
+        for d in ALL_DAYS:
+            if d == p:
+                continue
+            for peak_h in shift_peak_hours(d, s):
+                if abs(break_raw - peak_h) <= 1:
+                    return False
+        return True
+
+    def is_break_valid_wft(s, b):
+        """Same rule for WFT (works Sat=5 and Sun=6 only)."""
+        break_raw = s + b
+        for d in [5, 6]:
+            for peak_h in shift_peak_hours(d, s):
+                if abs(break_raw - peak_h) <= 1:
+                    return False
+        return True
+
     ft_keys  = [(s, p, b) for s in FT_STARTS for p in day_off_days
-                for b in FT_BREAK_OFFSETS if is_active_ft(s, p, b)]
+                for b in FT_BREAK_OFFSETS
+                if is_active_ft(s, p, b) and is_break_valid_ft(s, p, b)]
     pt_keys  = [(s, p) for s in PT_STARTS for p in day_off_days
                 if use_pt and is_active_pt(s, p)]
     wft_keys = [(s, b) for s in WFT_STARTS for b in FT_BREAK_OFFSETS
-                if use_wft and is_active_wft(s, b)]
+                if use_wft and is_active_wft(s, b) and is_break_valid_wft(s, b)]
     wpt_keys = [s for s in PT_STARTS if use_wpt and is_active_wpt(s)]
 
     # ── Build CP-SAT model ────────────────────────────────────────────────────
