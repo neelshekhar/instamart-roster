@@ -19,7 +19,7 @@ const FT_STARTS: number[]  = [5,6,7,8,9,10,11,12,13,14,15, 20,21,22,23]; // day 
 const PT_STARTS: number[]  = Array.from({ length: 16 }, (_, i) => i + 5); // [5..20]
 const WFT_STARTS: number[] = Array.from({ length: 11 }, (_, i) => i + 5); // [5..15] day only
 
-const FT_BREAK_OFFSETS: number[] = [3, 4]; // break 3 or 4 hours after shift start (staggered)
+const FT_BREAK_OFFSETS: number[] = [3, 4, 5]; // break 3, 4, or 5 hours after shift start (staggered; 2×30min = 1h hole)
 
 const MON_FRI: number[] = [0, 1, 2, 3, 4];
 const ALL_DAYS: number[] = [0, 1, 2, 3, 4, 5, 6];
