@@ -6,11 +6,11 @@ import type { SolverResult } from "@/lib/types";
 
 const COST_PER_HOUR = 783 / 8; // ₹97.875 per worker-hour
 
-// Weekly paid hours by worker type (including break for FT/WFT)
+// Weekly paid hours by worker type (breaks are unpaid; FT productive = 8h/day)
 const WEEKLY_PAID_HOURS = {
-  FT:  9 * 6,   // 9h/day × 6 active days = 54h
-  PT:  4 * 6,   // 4h/day × 6 active days = 24h
-  WFT: 9 * 2,   // 9h/day × 2 weekend days = 18h
+  FT:  8 * 6,   // 8 productive hours/day × 6 active days = 48h (break unpaid)
+  PT:  4 * 6,   // 4h/day × 6 active days = 24h (= exactly half of FT)
+  WFT: 8 * 2,   // 8 productive hours/day × 2 weekend days = 16h (break unpaid)
   WPT: 4 * 2,   // 4h/day × 2 weekend days = 8h
 };
 

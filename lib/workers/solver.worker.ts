@@ -90,20 +90,11 @@ function isActiveWPT(oph: number[][], s: number): boolean {
 
 // ─── LP builder ──────────────────────────────────────────────────────────────
 //
-// HiGHS WASM MIP solver crashes whenever objective coefficients are non-uniform
-// (any value other than 1) — both large integers (54/24) and small ones (2/1)
-// trigger Aborted() / memory faults in the WASM binary.
+// HiGHS WASM MIP solver: objective coefficients must all be 1 (non-uniform
+// coefficients trigger Aborted() / memory faults in the WASM binary).
+// Objective: minimise total headcount (all active vars get coefficient 1).
 //
-// Workaround: two-phase approach, both phases use only coefficient = 1.
-//   Phase 1 → minimise total headcount (all-1 objective).
-//   Phase 2 → add "total ≤ N_opt" and minimise FT + WFT only (PT/WPT vars
-//             absent from objective).  Solver fills remaining budget with
-//             part-timers to meet coverage, effectively maximising PT usage.
-//
-// phase  : 1 = headcount; 2 = min-FT given total cap
-// totalCap : only used in phase 2; equals N_opt from phase 1
-//
-function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
+function buildLP(input: SolverInput): string {
   const { oph, config } = input;
   const rate = config.productivityRate;
 
@@ -150,17 +141,10 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
   // ── Objective ──────────────────────────────────────────────────────────────
   lines.push("Minimize");
   const objTerms: string[] = [];
-  if (phase === 1) {
-    // Phase 1: minimise total headcount (all active vars get coefficient 1)
-    ftVars .forEach(({ s, p, b }) => objTerms.push(varFT(s, p, b)));
-    ptVars .forEach(({ s, p })    => objTerms.push(varPT(s, p)));
-    wftVars.forEach(({ s, b })    => objTerms.push(varWFT(s, b)));
-    wptStarts.forEach((s)         => objTerms.push(varWPT(s)));
-  } else {
-    // Phase 2: minimise FT + WFT only (PT/WPT are free → solver prefers them)
-    ftVars .forEach(({ s, p, b }) => objTerms.push(varFT(s, p, b)));
-    wftVars.forEach(({ s, b })    => objTerms.push(varWFT(s, b)));
-  }
+  ftVars .forEach(({ s, p, b }) => objTerms.push(varFT(s, p, b)));
+  ptVars .forEach(({ s, p })    => objTerms.push(varPT(s, p)));
+  wftVars.forEach(({ s, b })    => objTerms.push(varWFT(s, b)));
+  wptStarts.forEach((s)         => objTerms.push(varWPT(s)));
   lines.push(" obj: " + objTerms.join(" + "));
 
   lines.push("");
@@ -239,16 +223,6 @@ function buildLP(input: SolverInput, phase: 1 | 2 = 1, totalCap = 0): string {
       + " - " + wdV.map((v) => `${capWk} ${v}`).join(" - ");
     conCount++;
     lines.push(` c${conCount}: ${lhs} <= 0`);
-  }
-
-  // ── Phase 2 only: total active workers ≤ N_optimal from phase 1 ───────────
-  if (phase === 2 && totalCap > 0) {
-    const allV = ftVars.map(({ s, p, b }) => varFT(s, p, b));
-    ptVars .forEach(({ s, p }) => allV.push(varPT(s, p)));
-    wftVars.forEach(({ s, b }) => allV.push(varWFT(s, b)));
-    wptStarts.forEach((s)      => allV.push(varWPT(s)));
-    conCount++;
-    lines.push(` c${conCount}: ${allV.join(" + ")} <= ${totalCap}`);
   }
 
   // ── Bounds (only active, demand-covering variables) ────────────────────────
@@ -386,53 +360,23 @@ self.onmessage = async (e: MessageEvent) => {
       locateFile: (file: string) => `/${file}`,
     });
 
-    // ── Phase 1: minimise total headcount ──────────────────────────────────
-    self.postMessage({ type: "progress", message: "Phase 1 — minimising total headcount…" });
+    self.postMessage({ type: "progress", message: "Solving — minimising total headcount…" });
     const t0 = Date.now();
-    const lp1 = buildLP(input, 1);
-    const r1 = highs.solve(lp1, {});
+    const lp = buildLP(input);
+    const result = highs.solve(lp, {});
 
-    if (r1.Status !== "Optimal") {
+    if (result.Status !== "Optimal") {
       const res: SolverResult = {
-        status: r1.Status === "Infeasible" ? "infeasible" : "error",
+        status: result.Status === "Infeasible" ? "infeasible" : "error",
         workers: [], totalWorkers: 0,
         ftCount: 0, ptCount: 0, wftCount: 0, wptCount: 0,
         coverage: Array.from({ length: 7 }, () => new Array(24).fill(0)),
         required: Array.from({ length: 7 }, () => new Array(24).fill(0)),
         solveTimeMs: Date.now() - t0,
-        errorMessage: `Phase 1 solver status: ${r1.Status}`,
+        errorMessage: `Solver status: ${result.Status}`,
       };
       self.postMessage({ type: "result", payload: res });
       return;
-    }
-
-    // Sum all primal values to get the minimum total headcount N_opt
-    const cols1 = r1.Columns as Record<string, { Primal: number }>;
-    const nOpt = Math.round(
-      Object.values(cols1).reduce((sum, col) => sum + col.Primal, 0)
-    );
-
-    // ── Phase 2: at fixed total N_opt, minimise FT+WFT → maximise PT usage ─
-    // Skip when capPt=0: no PT/WPT vars exist, Phase 2 gives the same answer
-    // as Phase 1 and adding a redundant total-cap constraint can crash HiGHS.
-    //
-    // When Phase 2 does run we create a FRESH HiGHS instance.  Reusing the
-    // Phase-1 instance causes "memory access out of bounds" because HiGHS WASM
-    // does not fully reset its heap between successive solve() calls, so the
-    // Phase-2 LP parser reads stale/corrupted memory left by Phase 1.
-    const runPhase2 = Math.round(input.config.partTimerCapPct) > 0;
-    let result = r1;
-
-    if (runPhase2) {
-      try {
-        self.postMessage({ type: "progress", message: `Phase 2 — maximising part-timer usage (N=${nOpt})…` });
-        const highs2 = await highsModule.default({ locateFile: (file: string) => `/${file}` });
-        const lp2 = buildLP(input, 2, nOpt);
-        const r2 = highs2.solve(lp2, {});
-        if (r2.Status === "Optimal") result = r2;
-      } catch {
-        // Phase 2 failed — silently use Phase 1 solution (already optimal headcount)
-      }
     }
 
     const solveTimeMs = Date.now() - t0;
