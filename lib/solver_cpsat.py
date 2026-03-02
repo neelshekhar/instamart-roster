@@ -29,6 +29,7 @@ Break model for FT / WFT:
   ProductiveHours output: only hours where BOTH half-slots are non-break = 7 h.
 """
 
+import functools
 import json
 import math
 import sys
@@ -54,6 +55,7 @@ MON_FRI  = [0, 1, 2, 3, 4]
 ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
 
 
+@functools.lru_cache(maxsize=None)
 def ft_coverage(s, bs1, bs2):
     """Return {raw_hour: contribution} for an FT/WFT shift starting at s.
     raw_hour may be ≥ 24 for overnight shifts.
@@ -171,6 +173,13 @@ def solve(inp):
                         return False
         return True
 
+    _peak_cache: dict = {}
+    _raw_shift_peak_hours = shift_peak_hours
+    def shift_peak_hours(d, s):
+        if (d, s) not in _peak_cache:
+            _peak_cache[(d, s)] = _raw_shift_peak_hours(d, s)
+        return _peak_cache[(d, s)]
+
     ft_keys  = [(s, p, bs1, bs2) for s in FT_STARTS for p in day_off_days
                 for (bs1, bs2) in FT_BREAK_HALF_SLOTS
                 if is_active_ft(s, p, bs1, bs2) and is_break_valid_ft(s, p, bs1, bs2)]
@@ -182,7 +191,11 @@ def solve(inp):
 
     # ── Build CP-SAT model ────────────────────────────────────────────────────
     model   = cp_model.CpModel()
-    MAX_CNT = 500   # upper bound on any single worker-group variable
+    # Tight upper bound: no variable ever needs to exceed the peak per-slot requirement.
+    MAX_CNT = max(
+        (math.ceil(oph[d][h] / rate) for d in range(7) for h in range(24) if oph[d][h] > 0),
+        default=1,
+    )
 
     xFT  = {k: model.new_int_var(0, MAX_CNT, f"xFT_{k[0]}_{k[1]}_{k[2]}_{k[3]}") for k in ft_keys}
     xPT  = {k: model.new_int_var(0, MAX_CNT, f"xPT_{k[0]}_{k[1]}")               for k in pt_keys}
@@ -290,7 +303,7 @@ def solve(inp):
 
     # ── Solve ─────────────────────────────────────────────────────────────────
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 120.0
+    solver.parameters.max_time_in_seconds = 30.0
     t0     = time.time()
     status = solver.solve(model)
     solve_ms = round((time.time() - t0) * 1000)
