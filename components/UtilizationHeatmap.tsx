@@ -1,18 +1,22 @@
 "use client";
 
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SolverResult, OptimizerConfig } from "@/lib/types";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOURS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`);
 
+type ViewMode = "coverage" | "surplus" | "actual";
+
 // ─── Color constants ──────────────────────────────────────────────────────────
+// Soft tones consistent with the KPI card palette (red-50/green-50 family).
 
 const COVERAGE_COLORS = {
-  understaffed:     { bg: "#E53935", text: "#fff" },
-  balanced:         { bg: "#2E7D32", text: "#fff" },
-  overstaffed:      { bg: "#F9A825", text: "#000" },
-  heavyOverstaffed: { bg: "#6A1B9A", text: "#fff" },
+  understaffed:     { bg: "#FECACA", text: "#991B1B" },  // red-200   / red-800
+  balanced:         { bg: "#BBF7D0", text: "#166534" },  // green-200 / green-800
+  overstaffed:      { bg: "#FEF08A", text: "#854D0E" },  // yellow-200 / yellow-800
+  heavyOverstaffed: { bg: "#E9D5FF", text: "#6B21A8" },  // purple-200 / purple-800
   nodemand:         { bg: "#f9fafb", text: "#d1d5db" },
 } as const;
 
@@ -38,10 +42,12 @@ interface UtilizationHeatmapProps {
 }
 
 export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) {
+  const [view, setView] = useState<ViewMode>("coverage");
+
   let totalRequired = 0;
   let totalDeployed = 0;
 
-  type CellData = { req: number; cov: number; pct: number } | null;
+  type CellData = { req: number; cov: number; pct: number; surplus: number } | null;
 
   const cells: CellData[][] = Array.from({ length: 7 }, (_, d) =>
     Array.from({ length: 24 }, (_, h) => {
@@ -50,18 +56,43 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
       if (req === 0) return null;
       totalRequired += req;
       totalDeployed += cov;
-      return { req, cov, pct: calcCoveragePct(cov, req) };
+      return { req, cov, pct: calcCoveragePct(cov, req), surplus: cov - req };
     })
   );
 
-  const netDiff = totalDeployed - totalRequired;
+  const netDiff    = totalDeployed - totalRequired;
   const overallPct = calcCoveragePct(totalDeployed, totalRequired);
 
   return (
     <Card style={{ backgroundColor: "#FAFAFA" }}>
       <CardHeader>
-        <CardTitle className="text-base">Required vs Deployed Hours</CardTitle>
-        <p className="text-xs text-gray-500 mt-0.5">Each cell shows Coverage % (Deployed ÷ Required)</p>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <CardTitle className="text-base">Required vs Deployed Hours</CardTitle>
+            <p className="text-xs text-gray-500 mt-0.5">Each cell shows Coverage % (Deployed ÷ Required)</p>
+          </div>
+          {/* View toggle */}
+          <div className="flex rounded-md border border-gray-200 overflow-hidden text-xs">
+            <button
+              onClick={() => setView("coverage")}
+              className={`px-3 py-1.5 transition-colors ${view === "coverage" ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              Coverage %
+            </button>
+            <button
+              onClick={() => setView("surplus")}
+              className={`px-3 py-1.5 transition-colors border-l border-gray-200 ${view === "surplus" ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              Net Difference
+            </button>
+            <button
+              onClick={() => setView("actual")}
+              className={`px-3 py-1.5 transition-colors border-l border-gray-200 ${view === "actual" ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              Deployed / Required
+            </button>
+          </div>
+        </div>
       </CardHeader>
 
       <CardContent className="space-y-5">
@@ -122,8 +153,16 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
                   </td>
                   {cells[d].map((cell, h) => {
                     const { bg, text } = coverageColor(cell === null ? null : cell.pct);
-                    const displayVal   = cell === null ? "" : `${cell.pct}%`;
-                    const isPeak       = result.peakSlots?.[d]?.[h] ?? false;
+
+                    const displayVal = cell === null
+                      ? ""
+                      : view === "coverage"
+                      ? `${cell.pct}%`
+                      : view === "surplus"
+                      ? (cell.surplus === 0 ? "0" : `${cell.surplus > 0 ? "+" : ""}${cell.surplus}`)
+                      : `${cell.cov}/${cell.req}`;
+
+                    const isPeak = result.peakSlots?.[d]?.[h] ?? false;
 
                     const nonPeakNote =
                       cell && !isPeak && result.peakSlots && (config.nonPeakTolerancePct ?? 0) > 0
@@ -132,7 +171,7 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
 
                     const tooltip = cell === null
                       ? `${day} ${HOURS[h]}: No demand`
-                      : `${day} ${HOURS[h]}: ${cell.pct}% coverage — ${cell.req} Required Hours, ${cell.cov} Deployed Hours${nonPeakNote}`;
+                      : `${day} ${HOURS[h]}: ${cell.pct}% coverage — ${cell.req} Required Hours, ${cell.cov} Deployed Hours (${cell.surplus >= 0 ? "+" : ""}${cell.surplus})${nonPeakNote}`;
 
                     return (
                       <td key={h} className="p-0">
