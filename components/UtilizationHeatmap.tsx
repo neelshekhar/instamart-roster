@@ -28,9 +28,9 @@ function calcCoveragePct(deployed: number, required: number): number {
 
 function coverageColor(pct: number | null): { bg: string; text: string } {
   if (pct === null) return COVERAGE_COLORS.nodemand;
-  if (pct < 95)     return COVERAGE_COLORS.understaffed;
+  if (pct < 85)     return COVERAGE_COLORS.understaffed;
   if (pct <= 105)   return COVERAGE_COLORS.balanced;
-  if (pct <= 120)   return COVERAGE_COLORS.overstaffed;
+  if (pct <= 150)   return COVERAGE_COLORS.overstaffed;
   return                   COVERAGE_COLORS.heavyOverstaffed;
 }
 
@@ -121,7 +121,7 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
             value={`${overallPct}%`}
             label="Overall Coverage %"
             sub="Total deployed ÷ required"
-            accent={overallPct < 95 ? "red" : overallPct <= 120 ? "green" : "yellow"}
+            accent={overallPct < 85 ? "red" : overallPct <= 150 ? "green" : "yellow"}
           />
         </div>
 
@@ -157,7 +157,7 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
                     const displayVal = cell === null
                       ? ""
                       : view === "coverage"
-                      ? `${cell.pct}%`
+                      ? `${cell.pct}`
                       : view === "surplus"
                       ? (cell.surplus === 0 ? "0" : `${cell.surplus > 0 ? "+" : ""}${cell.surplus}`)
                       : `${cell.cov}/${cell.req}`;
@@ -182,7 +182,7 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
                             color: text,
                             height: 32,
                             width: 30,
-                            fontSize: 8,
+                            fontSize: 10,
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
@@ -211,10 +211,10 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
         {/* ── Legend ── */}
         <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500">
           <span className="font-medium text-gray-700">Coverage % (Deployed ÷ Required)</span>
-          <LegendSwatch color={COVERAGE_COLORS.balanced.bg}         label="95–105% — Balanced" />
-          <LegendSwatch color={COVERAGE_COLORS.understaffed.bg}     label="<95% — Understaffed" />
-          <LegendSwatch color={COVERAGE_COLORS.overstaffed.bg}      label="105–120% — Overstaffed" />
-          <LegendSwatch color={COVERAGE_COLORS.heavyOverstaffed.bg} label=">120% — Heavy Overstaffed" />
+          <LegendSwatch color={COVERAGE_COLORS.balanced.bg}         label="85–105% — Balanced" />
+          <LegendSwatch color={COVERAGE_COLORS.understaffed.bg}     label="<85% — Understaffed" />
+          <LegendSwatch color={COVERAGE_COLORS.overstaffed.bg}      label="105–150% — Overstaffed" />
+          <LegendSwatch color={COVERAGE_COLORS.heavyOverstaffed.bg} label=">150% — Heavy Overstaffed" />
           {result.peakSlots && (
             <div className="flex items-center gap-1.5">
               <div style={{ width: 14, height: 14, borderRadius: 2, border: "2px solid #000" }} />
