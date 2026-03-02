@@ -7,9 +7,8 @@ import type { OphMatrix } from "@/lib/types";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-const SAMPLE_WEEKDAY = [5,5,5,5,5,5, 20,20,50,50,50,20, 20,20,20,20,30,40, 50,50,80,80,30,10];
-const SAMPLE_SAT     = [6,6,6,6,6,6, 24,24,60,60,60,24, 24,24,24,24,36,48, 60,60,96,96,36,12];
-const SAMPLE_SUN     = [7,7,7,7,7,7, 29,29,72,72,72,29, 29,29,29,29,43,58, 72,72,115,115,43,14];
+const SAMPLE_WEEKDAY  = [0,0,0,0,0,0, 30,50,80,100,60,40, 40,30,30,20,20,60, 80,100,120,120,80,20];
+const SAMPLE_WEEKEND  = [0,0,0,0,0,0, 39,65,104,130,78,52, 52,39,39,26,26,78, 104,130,156,156,104,26];
 
 interface DemandEditorProps {
   oph: OphMatrix;
@@ -40,8 +39,8 @@ export function DemandEditor({ oph, onChange, onProceed }: DemandEditorProps) {
       [...SAMPLE_WEEKDAY],
       [...SAMPLE_WEEKDAY],
       [...SAMPLE_WEEKDAY],
-      [...SAMPLE_SAT],
-      [...SAMPLE_SUN],
+      [...SAMPLE_WEEKEND],
+      [...SAMPLE_WEEKEND],
     ]);
   };
 
