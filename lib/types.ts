@@ -14,6 +14,8 @@ export interface OptimizerConfig {
   weekenderCapPct: number;
   /** When true, FT/PT workers may have their day-off on Sat or Sun */
   allowWeekendDayOff: boolean;
+  /** Non-peak slot tolerance: staffing may be this % below required (0–20, default 0) */
+  nonPeakTolerancePct: number;
 }
 
 export interface WorkerSlot {
@@ -52,6 +54,8 @@ export interface SolverResult {
   required: number[][];
   /** Raw demand matrix [day][hour] = orders per hour (echoed from input) */
   oph?: OphMatrix;
+  /** 7×24 boolean matrix: true = peak slot (demand ≥70% of day max) */
+  peakSlots?: boolean[][];
   solveTimeMs?: number;
   errorMessage?: string;
 }

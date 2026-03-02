@@ -4,10 +4,12 @@ CP-SAT rostering solver for Instamart.
 
 Reads SolverInput JSON from stdin, writes SolverResult JSON to stdout.
 
-Objective: minimise total paid hours.
-  FT / WFT  = 8 productive hours/day  → coefficient 2
-  PT / WPT  = 4 productive hours/day  → coefficient 1
-(ratio is what matters; CP-SAT handles integer coefficients of any size)
+Objective: minimise total weekly cost using days-worked-scaled coefficients.
+  FT  works 6 days/week → coeff 12  (salary ratio 2 × 6 days)
+  WFT works 2 days/week → coeff 4   (salary ratio 2 × 2 days)
+  PT  works 6 days/week → coeff 6   (salary ratio 1 × 6 days)
+  WPT works 2 days/week → coeff 2   (salary ratio 1 × 2 days)
+The 2:1 FT:PT daily salary ratio is retained; days-worked multiplier added.
 
 Single-phase solve — no two-phase workaround needed (unlike HiGHS WASM).
 
@@ -24,6 +26,7 @@ Break model for FT / WFT:
   on break during it.  Required headcount must be met at every half-slot
   independently — no fractional contributions.
   Net productive time: 16 productive half-slots × 30 min = 480 min = 8 h  ✓
+  ProductiveHours output: only hours where BOTH half-slots are non-break = 7 h.
 """
 
 import json
@@ -35,7 +38,7 @@ from ortools.sat.python import cp_model
 # ── Shift definitions ─────────────────────────────────────────────────────────
 FT_STARTS  = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 21, 22, 23]
 PT_STARTS  = list(range(5, 21))   # [5..20]
-WFT_STARTS = list(range(5, 16))   # [5..15]  day-only for weekenders
+WFT_STARTS = list(range(5, 21))   # [5..20]  extended to cover evening slots
 
 # Half-slot offsets within a 9-hour shift (18 half-slots total, 0..17).
 # Break 1 (bs1): ≥ 4 (after first 2 h), Break 2 (bs2): ≤ 13 (before last 2 h).
@@ -54,9 +57,7 @@ ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
 def ft_coverage(s, bs1, bs2):
     """Return {raw_hour: contribution} for an FT/WFT shift starting at s.
     raw_hour may be ≥ 24 for overnight shifts.
-    Used to enumerate which hours the shift occupies (for is_active and
-    productiveHours output). The contribution values are not used by the
-    coverage constraints (which operate at the half-slot level)."""
+    Contribution: 2 = both half-slots productive, 1 = one half-slot is a break."""
     result = {}
     for shift_h in range(9):
         raw_h = s + shift_h
@@ -81,11 +82,19 @@ def solve(inp):
     rate   = config["productivityRate"]
     cap_pt = round(config["partTimerCapPct"])
     cap_wk = round(config["weekenderCapPct"])
+    non_peak_tol = round(config.get("nonPeakTolerancePct", 0))
 
     use_pt  = cap_pt > 0
     use_wft = cap_wk > 0
     use_wpt = cap_pt > 0 and cap_wk > 0
     day_off_days = ALL_DAYS if config["allowWeekendDayOff"] else MON_FRI
+
+    # ── Pre-compute peak slots (demand ≥ 70% of day's max) ────────────────────
+    day_max = [max(oph[d]) for d in range(7)]
+    peak_slots = [
+        [oph[d][h] > 0 and oph[d][h] >= 0.70 * day_max[d] for h in range(24)]
+        for d in range(7)
+    ]
 
     # ── Pre-filter: only keep variables that cover ≥1 demand slot ─────────────
     def is_active_ft(s, p, bs1, bs2):
@@ -110,7 +119,14 @@ def solve(inp):
     def is_active_wft(s, bs1, bs2):
         cov = ft_coverage(s, bs1, bs2)
         same = [h for h in cov if h < 24]
-        return any(oph[d][h] > 0 for d in [5, 6] for h in same)
+        nxt  = [h - 24 for h in cov if h >= 24]
+        # Same-day coverage on Sat or Sun
+        if any(oph[d][h] > 0 for d in [5, 6] for h in same):
+            return True
+        # Overnight from Sat (d=5) into Sun (d=6) — WFT doesn't work Mon
+        if nxt and any(oph[6][h] > 0 for h in nxt):
+            return True
+        return False
 
     def is_active_wpt(s):
         return any(oph[d][h] > 0 for d in [5, 6] for h in pt_hours(s))
@@ -134,10 +150,7 @@ def solve(inp):
         return peaks  # empty if no demand in window
 
     def is_break_valid_ft(s, p, bs1, bs2):
-        """True iff neither break is within ±1 h of the peak on any working day.
-        Break time (absolute half-slots) = 2*s + bs.
-        Peak time (absolute half-slots) = 2*peak_h.
-        ±1 h = ±2 half-slots."""
+        """True iff neither break is within ±1 h of the peak on any working day."""
         for bs in (bs1, bs2):
             break_hs = 2 * s + bs
             for d in ALL_DAYS:
@@ -167,10 +180,6 @@ def solve(inp):
                 if use_wft and is_active_wft(s, bs1, bs2) and is_break_valid_wft(s, bs1, bs2)]
     wpt_keys = [s for s in PT_STARTS if use_wpt and is_active_wpt(s)]
 
-    # Pre-compute coverage dicts (avoid recomputing in nested loops)
-    ft_cov  = {k: ft_coverage(k[0], k[2], k[3]) for k in ft_keys}
-    wft_cov = {k: ft_coverage(k[0], k[1], k[2]) for k in wft_keys}
-
     # ── Build CP-SAT model ────────────────────────────────────────────────────
     model   = cp_model.CpModel()
     MAX_CNT = 500   # upper bound on any single worker-group variable
@@ -181,9 +190,8 @@ def solve(inp):
     xWPT = {s: model.new_int_var(0, MAX_CNT, f"xWPT_{s}")                         for s in wpt_keys}
 
     # ── Coverage constraints (per 30-min half-slot) ──────────────────────────
-    # Headcount must meet ceil(oph/rate) at EVERY 30-min window independently.
-    # A worker either covers a half-slot (productive) or doesn't (on break).
-    # No scaling — binary contribution per half-slot per worker.
+    # Headcount must meet required at EVERY 30-min window independently.
+    # Peak slots: hard required. Non-peak with tolerance: relaxed required.
     # Two constraints per demand hour: one for :00 half, one for :30 half.
     for d in range(7):
         for h in range(24):
@@ -191,6 +199,12 @@ def solve(inp):
             if demand <= 0:
                 continue
             required = math.ceil(demand / rate)
+
+            # Apply non-peak tolerance to off-peak slots
+            if peak_slots[d][h] or non_peak_tol == 0:
+                slot_required = required
+            else:
+                slot_required = max(1, math.ceil(required * (1 - non_peak_tol / 100)))
 
             for half in range(2):  # 0 = :00-:30, 1 = :30-:00
                 abs_hs = 2 * h + half   # absolute half-slot within the day
@@ -220,19 +234,28 @@ def solve(inp):
                     if d != p and h in pt_hours(s):
                         terms.append(var)
 
-                # Weekenders (Sat=5, Sun=6 only; WFT starts ≤ 15, all same-day)
+                # WFT same-day (Sat=5, Sun=6)
                 if d in (5, 6):
                     for k, var in xWFT.items():
                         s, bs1, bs2 = k
                         shift_hs = abs_hs - 2 * s
                         if 0 <= shift_hs <= 17 and shift_hs not in (bs1, bs2):
                             terms.append(var)
+                    # WFT overnight: Sat shifts (s≥20) extend into Sun early morning
+                    if d == 6:
+                        for k, var in xWFT.items():
+                            s, bs1, bs2 = k
+                            if s < 20:
+                                continue
+                            shift_hs = 2 * (h + 24 - s) + half
+                            if 0 <= shift_hs <= 17 and shift_hs not in (bs1, bs2):
+                                terms.append(var)
                     for s, var in xWPT.items():
                         if h in pt_hours(s):
                             terms.append(var)
 
                 if terms:
-                    model.add(sum(terms) >= required)
+                    model.add(sum(terms) >= slot_required)
 
     # ── Cap constraints ───────────────────────────────────────────────────────
     if use_pt and cap_pt < 100:
@@ -253,14 +276,16 @@ def solve(inp):
                 (100 - cap_wk) * sum(wk_sum) <= cap_wk * sum(wd_sum)
             )
 
-    # ── Objective: minimise total paid hours ──────────────────────────────────
-    # FT/WFT: 8 productive hours/day → weight 2
-    # PT/WPT: 4 productive hours/day → weight 1
+    # ── Objective: minimise total weekly cost (days-worked-scaled) ────────────
+    # FT  works 6 days/week: coeff = 2 × 6 = 12
+    # WFT works 2 days/week: coeff = 2 × 2 = 4
+    # PT  works 6 days/week: coeff = 1 × 6 = 6
+    # WPT works 2 days/week: coeff = 1 × 2 = 2
     obj = []
-    for var in xFT.values():  obj.append(2 * var)
-    for var in xWFT.values(): obj.append(2 * var)
-    for var in xPT.values():  obj.append(var)
-    for var in xWPT.values(): obj.append(var)
+    for var in xFT.values():  obj.append(12 * var)
+    for var in xWFT.values(): obj.append(4  * var)
+    for var in xPT.values():  obj.append(6  * var)
+    for var in xWPT.values(): obj.append(2  * var)
     model.minimize(sum(obj) if obj else 0)
 
     # ── Solve ─────────────────────────────────────────────────────────────────
@@ -275,6 +300,7 @@ def solve(inp):
         "ftCount": 0, "ptCount": 0, "wftCount": 0, "wptCount": 0,
         "coverage": [[0] * 24 for _ in range(7)],
         "required": [[0] * 24 for _ in range(7)],
+        "peakSlots": peak_slots,
         "solveTimeMs": solve_ms,
     }
 
@@ -293,15 +319,18 @@ def solve(inp):
     for k, var in xFT.items():
         s, p, bs1, bs2 = k
         for _ in range(solver.value(var)):
-            cov = ft_cov[k]
+            # productiveHours: only hours where BOTH half-slots are non-break (7 h)
+            productive = []
+            for shift_h in range(9):
+                hs0 = 2 * shift_h
+                hs1 = 2 * shift_h + 1
+                if bs1 not in (hs0, hs1) and bs2 not in (hs0, hs1):
+                    productive.append((s + shift_h) % 24)
             workers.append({
                 "id": wid, "type": "FT",
                 "shiftStart": s, "shiftEnd": s + 9,
                 "dayOff": p,
-                # All 9 shift hours mapped mod-24 so overnight hours (raw ≥ 24)
-                # appear as 0–6 and are routed to the next calendar day by the
-                # coverage matrix builder via the `h < shiftStart` check.
-                "productiveHours": sorted(h % 24 for h in cov),
+                "productiveHours": sorted(productive),
                 "breakHalfSlots": [bs1, bs2],
             })
             wid += 1; ft_count += 1
@@ -319,12 +348,20 @@ def solve(inp):
     for k, var in xWFT.items():
         s, bs1, bs2 = k
         for _ in range(solver.value(var)):
-            cov = wft_cov[k]
+            # productiveHours: only hours where BOTH half-slots are non-break (7 h).
+            # Use mod-24 so overnight hours (raw ≥ 24) appear as 0-n and are
+            # routed to the next calendar day by the coverage matrix builder.
+            productive = []
+            for shift_h in range(9):
+                hs0 = 2 * shift_h
+                hs1 = 2 * shift_h + 1
+                if bs1 not in (hs0, hs1) and bs2 not in (hs0, hs1):
+                    productive.append((s + shift_h) % 24)
             workers.append({
                 "id": wid, "type": "WFT",
                 "shiftStart": s, "shiftEnd": s + 9,
                 "dayOff": None,
-                "productiveHours": sorted(h for h in cov if h < 24),
+                "productiveHours": sorted(productive),
                 "breakHalfSlots": [bs1, bs2],
             })
             wid += 1; wft_count += 1
@@ -350,7 +387,10 @@ def solve(inp):
             for h in w["productiveHours"]:
                 if 0 <= h < 24:
                     if h < w["shiftStart"]:
-                        # Overnight wrap — hour belongs to next calendar day
+                        # Overnight wrap — hour belongs to next calendar day.
+                        # For WFT: only Sat→Sun is valid (WFT doesn't work Mon).
+                        if w["type"] == "WFT" and d == 6:
+                            continue  # Skip Sun→Mon overflow for WFT
                         coverage[(d + 1) % 7][h] += 1
                     else:
                         coverage[d][h] += 1
@@ -369,6 +409,7 @@ def solve(inp):
         "coverage": coverage,
         "required": required,
         "oph": oph,
+        "peakSlots": peak_slots,
         "solveTimeMs": solve_ms,
     }
 

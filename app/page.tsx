@@ -204,7 +204,7 @@ export default function Home() {
                 <WeeklyOverviewChart result={result} />
               </TabsContent>
               <TabsContent value="heatmap" className="mt-4">
-                <UtilizationHeatmap result={result} />
+                <UtilizationHeatmap result={result} config={config} />
               </TabsContent>
               <TabsContent value="chart" className="mt-4">
                 <CoverageChart result={result} />

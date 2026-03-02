@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Slider } from "@/components/ui/slider";
 import type { OptimizerConfig, OphMatrix } from "@/lib/types";
 
 interface ConfigPanelProps {
@@ -42,6 +43,7 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
     partTimerCapPct: 40,
     weekenderCapPct: 30,
     allowWeekendDayOff: false,
+    nonPeakTolerancePct: 0,
   });
 
   // Raw string state so users can freely type without the field snapping
@@ -150,6 +152,27 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
                 </p>
               </div>
             </div>
+
+            {/* Non-peak tolerance slider */}
+            <div className="md:col-span-3 pt-2 border-t space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-medium">Non-peak tolerance</Label>
+                <span className="text-sm font-semibold text-blue-600">{config.nonPeakTolerancePct}%</span>
+              </div>
+              <Slider
+                min={0}
+                max={20}
+                step={1}
+                value={[config.nonPeakTolerancePct]}
+                onValueChange={([v]) => setConfig((prev) => ({ ...prev, nonPeakTolerancePct: v }))}
+                className="w-full"
+              />
+              <p className="text-xs text-gray-500">
+                Off-peak slots (demand &lt;70% of day&apos;s peak) may be staffed this % below required.
+                Peak slots always require full coverage.{" "}
+                <span className="text-blue-600">Recommended: 0–10% for standard operations.</span>
+              </p>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -163,7 +186,7 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <ShiftRule type="FT" label="Full-time" hours="9h slot, 8h productive" starts="05:00–15:00 or 20:00–23:00 (overnight)" off={config.allowWeekendDayOff ? "One day off (any day)" : "One weekday off (Mon–Fri)"} />
             <ShiftRule type="PT" label="Part-time" hours="4h straight, no break" starts="05:00 – 20:00" off={config.allowWeekendDayOff ? "One day off (any day)" : "One weekday off (Mon–Fri)"} />
-            <ShiftRule type="WFT" label="Weekend FT" hours="9h slot, 8h productive" starts="05:00 – 15:00" off="Mon–Fri (always off)" />
+            <ShiftRule type="WFT" label="Weekend FT" hours="9h slot, 8h productive" starts="05:00 – 20:00" off="Mon–Fri (always off)" />
             <ShiftRule type="WPT" label="Weekend PT" hours="4h straight, no break" starts="05:00 – 20:00" off="Mon–Fri (always off)" />
           </div>
         </CardContent>

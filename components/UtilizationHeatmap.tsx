@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { SolverResult } from "@/lib/types";
+import type { SolverResult, OptimizerConfig } from "@/lib/types";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOURS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`);
@@ -11,6 +11,7 @@ type ViewMode = "efficiency" | "surplus" | "actual";
 
 interface UtilizationHeatmapProps {
   result: SolverResult;
+  config: OptimizerConfig;
 }
 
 // ─── Color helpers ────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ function surplusColor(surplus: number | null, required: number): { bg: string; t
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
+export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) {
   const [view, setView] = useState<ViewMode>("efficiency");
 
   // Compute per-slot metrics
@@ -108,7 +109,7 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <CardTitle className="text-base">Labor Utilization</CardTitle>
+          <CardTitle className="text-base">Staffing Efficiency &amp; Coverage</CardTitle>
           {/* View toggle */}
           <div className="flex rounded-md border border-gray-200 overflow-hidden text-xs">
             <button
@@ -136,40 +137,59 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
       <CardContent className="space-y-5">
 
         {/* ── KPI cards ── */}
-        <div className={`grid gap-3 ${oph ? "grid-cols-2 md:grid-cols-5" : "grid-cols-2 md:grid-cols-4"}`}>
-          <KpiCard
-            value={`${serviceLevelPct}%`}
-            label="Service level"
-            sub="Slots with demand fully met"
-            accent={serviceLevelPct === 100 ? "green" : "red"}
-          />
-          <KpiCard
-            value={`${laborEfficiencyPct}%`}
-            label="Labor efficiency"
-            sub="Of deployed hours actually needed"
-            accent={laborEfficiencyPct >= 85 ? "green" : laborEfficiencyPct >= 70 ? "yellow" : "orange"}
-          />
-          <KpiCard
-            value={totalRequired.toLocaleString()}
-            label="Required worker-hrs"
-            sub="Demand-driven across the week"
-            accent="blue"
-          />
-          <KpiCard
-            value={`+${surplusHours.toLocaleString()}`}
-            label="Surplus worker-hrs"
-            sub="Deployed but not strictly needed"
-            accent="gray"
-          />
-          {oph && (
-            <KpiCard
-              value={`${orderFillPct}%`}
-              label="Order fill rate"
-              sub={`${ordersServed.toLocaleString("en-IN")} / ${totalOrders.toLocaleString("en-IN")} orders`}
-              accent={orderFillPct === 100 ? "green" : "orange"}
-            />
-          )}
-        </div>
+        {(() => {
+          const totalCoverage = result.coverage.flat().reduce((a, b) => a + b, 0);
+          const capacityUtilPct = totalCoverage > 0 && oph
+            ? Math.round((totalOrders / (totalCoverage * config.productivityRate)) * 100)
+            : null;
+          const capacityAccent: "green" | "yellow" | "orange" | "gray" =
+            capacityUtilPct === null ? "gray"
+            : capacityUtilPct >= 80 ? "green"
+            : capacityUtilPct >= 60 ? "yellow"
+            : "orange";
+          return (
+            <div className={`grid gap-3 ${oph ? "grid-cols-2 md:grid-cols-6" : "grid-cols-2 md:grid-cols-5"}`}>
+              <KpiCard
+                value={`${serviceLevelPct}%`}
+                label="Service level"
+                sub="Slots with demand fully met"
+                accent={serviceLevelPct === 100 ? "green" : "red"}
+              />
+              <KpiCard
+                value={`${laborEfficiencyPct}%`}
+                label="Staffing efficiency"
+                sub="Required ÷ deployed hours (higher = less waste)"
+                accent={laborEfficiencyPct >= 85 ? "green" : laborEfficiencyPct >= 70 ? "yellow" : "orange"}
+              />
+              <KpiCard
+                value={totalRequired.toLocaleString()}
+                label="Required worker-hrs"
+                sub="Demand-driven across the week"
+                accent="blue"
+              />
+              <KpiCard
+                value={`+${surplusHours.toLocaleString()}`}
+                label="Surplus worker-hrs"
+                sub="Deployed but not strictly needed"
+                accent="gray"
+              />
+              <KpiCard
+                value={capacityUtilPct !== null ? `${capacityUtilPct}%` : "—"}
+                label="Capacity utilization"
+                sub="Demand vs deployed capacity"
+                accent={capacityAccent}
+              />
+              {oph && (
+                <KpiCard
+                  value={`${orderFillPct}%`}
+                  label="Order fill rate"
+                  sub={`${ordersServed.toLocaleString("en-IN")} / ${totalOrders.toLocaleString("en-IN")} orders`}
+                  accent={orderFillPct === 100 ? "green" : "orange"}
+                />
+              )}
+            </div>
+          );
+        })()}
 
         {/* ── What does this mean? ── */}
         <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-800 space-y-1">
@@ -238,7 +258,7 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
                       ? efficiencyColor(cell.eff)
                       : view === "surplus"
                       ? surplusColor(cell.surplus, cell.req)
-                      : efficiencyColor(cell.eff); // "actual" uses efficiency coloring
+                      : surplusColor(cell.surplus, cell.req); // "actual": color by surplus not efficiency
 
                     const displayVal = cell === null
                       ? ""
@@ -248,13 +268,18 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
                       ? (cell.surplus === 0 ? "0" : `${cell.surplus > 0 ? "+" : ""}${cell.surplus}`)
                       : `${cell.cov}/${cell.req}`; // "actual": deployed/required
 
+                    const isPeak = result.peakSlots?.[d]?.[h] ?? false;
+                    const nonPeakRelaxed = cell && !isPeak && result.peakSlots
+                      ? `(non-peak: relaxed to ${Math.max(1, Math.ceil(cell.req * (1 - (config.nonPeakTolerancePct ?? 0) / 100)))} required)`
+                      : "";
+
                     const tooltip = cell === null
                       ? `${day} ${HOURS[h]}: No demand`
                       : view === "efficiency"
-                      ? `${day} ${HOURS[h]}: ${cell.eff}% efficient — ${cell.req} needed, ${cell.cov} deployed (${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus)`
+                      ? `${day} ${HOURS[h]}: ${cell.eff}% efficient — ${cell.req} needed, ${cell.cov} deployed (${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus)${nonPeakRelaxed ? " " + nonPeakRelaxed : ""}`
                       : view === "surplus"
-                      ? `${day} ${HOURS[h]}: ${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus workers — ${cell.req} needed, ${cell.cov} deployed`
-                      : `${day} ${HOURS[h]}: ${cell.cov} deployed / ${cell.req} required (${cell.eff}% efficient)`;
+                      ? `${day} ${HOURS[h]}: ${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus workers — ${cell.req} needed, ${cell.cov} deployed${nonPeakRelaxed ? " " + nonPeakRelaxed : ""}`
+                      : `${day} ${HOURS[h]}: ${cell.cov} deployed / ${cell.req} required (${cell.surplus >= 0 ? "+" : ""}${cell.surplus} surplus)${nonPeakRelaxed ? " " + nonPeakRelaxed : ""}`;
 
                     return (
                       <td key={h} className="p-0">
@@ -269,6 +294,7 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
+                            position: "relative",
                             margin: "1px",
                             borderRadius: 3,
                             fontWeight: 600,
@@ -278,6 +304,20 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
                           }}
                         >
                           {displayVal}
+                          {isPeak && cell !== null && (
+                            <span
+                              style={{
+                                position: "absolute",
+                                top: 1,
+                                right: 2,
+                                fontSize: 5,
+                                lineHeight: 1,
+                                opacity: 0.7,
+                              }}
+                            >
+                              ●
+                            </span>
+                          )}
                         </div>
                       </td>
                     );
@@ -290,7 +330,13 @@ export function UtilizationHeatmap({ result }: UtilizationHeatmapProps) {
 
         {/* ── Legend ── */}
         <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500">
-          {view === "efficiency" || view === "actual" ? (
+          {result.peakSlots && (
+            <div className="flex items-center gap-1.5">
+              <span style={{ fontSize: 8 }}>●</span>
+              <span>Peak slot (≥70% of day max)</span>
+            </div>
+          )}
+          {view === "efficiency" ? (
             <>
               <LegendSwatch color="#16a34a" label="≥95% efficient" />
               <LegendSwatch color="#4ade80" label="85–94%" />
