@@ -157,7 +157,7 @@ export function WeeklyOverviewChart({ result }: WeeklyOverviewChartProps) {
                             style={{
                               width: `${Math.min(100, eff)}%`,
                               backgroundColor:
-                                eff >= 85 ? "#16a34a" : eff >= 70 ? "#eab308" : "#f97316",
+                                eff >= 85 ? "#16a34a" : eff >= 70 ? "#facc15" : "#fb923c",
                             }}
                           />
                         </div>

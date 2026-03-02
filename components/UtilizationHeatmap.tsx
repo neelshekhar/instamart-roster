@@ -219,7 +219,7 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
               <p>
                 Each cell shows <strong>deployed / required</strong> workers for that slot.{" "}
                 <strong>8/8</strong> = exact coverage · <strong>10/8</strong> = 2 excess workers ·{" "}
-                <strong>7/8</strong> = 1 worker short. Color follows the same efficiency scale.
+                <strong>7/8</strong> = 1 worker short. Color follows the surplus scale — green = exact, yellow/orange = excess coverage, red = understaffed.
               </p>
             </>
           )}
@@ -338,20 +338,22 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
           )}
           {view === "efficiency" ? (
             <>
+              <LegendSwatch color="#dc2626" label="Understaffed (more demand than deployed)" />
               <LegendSwatch color="#16a34a" label="≥95% efficient" />
               <LegendSwatch color="#4ade80" label="85–94%" />
               <LegendSwatch color="#facc15" label="70–84%" />
               <LegendSwatch color="#fb923c" label="50–69%" />
-              <LegendSwatch color="#ef4444" label="<50% / understaffed" />
+              <LegendSwatch color="#ef4444" label="<50% efficiency (heavy idle time)" />
               <LegendSwatch color="#f9fafb" label="No demand" border />
             </>
           ) : (
             <>
+              <LegendSwatch color="#dc2626" label="Deficit (understaffed)" />
               <LegendSwatch color="#16a34a" label="0 surplus (exact)" />
-              <LegendSwatch color="#4ade80" label="+1 to 15%" />
-              <LegendSwatch color="#facc15" label="+15 to 30%" />
-              <LegendSwatch color="#fb923c" label="+30 to 50%" />
-              <LegendSwatch color="#ef4444" label=">50% / deficit" />
+              <LegendSwatch color="#4ade80" label="1–15% over" />
+              <LegendSwatch color="#facc15" label="15–30% over" />
+              <LegendSwatch color="#fb923c" label="30–50% over" />
+              <LegendSwatch color="#ef4444" label=">50% surplus (heavy waste)" />
               <LegendSwatch color="#f9fafb" label="No demand" border />
             </>
           )}
@@ -392,7 +394,7 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
                             className="h-1.5 rounded-full"
                             style={{
                               width: `${Math.min(100, eff)}%`,
-                              backgroundColor: eff >= 85 ? "#16a34a" : eff >= 70 ? "#eab308" : "#f97316",
+                              backgroundColor: eff >= 85 ? "#16a34a" : eff >= 70 ? "#facc15" : "#fb923c",
                             }}
                           />
                         </div>
