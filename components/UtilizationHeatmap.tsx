@@ -369,101 +369,134 @@ function OphCapacityPanel({
           </div>
 
           {/* Bar chart */}
-          <div className="overflow-x-auto pb-1">
-            <div style={{ display: "flex", gap: 2, alignItems: "flex-end", minWidth: 600 }}>
-              {hourData.map(({ h, ophDemand, capacity, unmet, isPeak, isBreak }) => {
-                const hasAnything = ophDemand > 0 || result.coverage[selectedDay][h] > 0;
-                if (!hasAnything) {
-                  return (
-                    <div key={h} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center" }}>
-                      <div style={{ height: 80 }} />
-                      <div style={{ fontSize: 8, color: "#d1d5db", marginTop: 2 }}>{String(h).padStart(2, "0")}</div>
-                    </div>
-                  );
-                }
+          {(() => {
+            const CHART_H = 160;  // bar area height px
+            const BAR_W   = 16;   // width of each individual bar
+            const COL_W   = BAR_W * 2 + 6; // column width: 2 bars + gap + padding
 
-                const demandH = Math.round((ophDemand / maxVal) * 80);
-                const capH    = Math.round((capacity   / maxVal) * 80);
-                const capColor = isBreak ? "#F87171" : "#4ADE80"; // red-400 / green-400
+            return (
+              <div className="overflow-x-auto pb-2" style={{ borderRadius: 8, border: "1px solid #e5e7eb", background: "#fafafa", padding: "12px 8px 8px" }}>
+                {/* Y-axis label */}
+                <div style={{ fontSize: 10, color: "#9CA3AF", marginBottom: 6, paddingLeft: 4 }}>
+                  Orders / hr
+                </div>
 
-                const tooltip = `${DAYS[selectedDay]} ${String(h).padStart(2, "0")}:00\n` +
-                  `Demand: ${Math.round(ophDemand)} orders/hr\n` +
-                  `Capacity: ${Math.round(capacity)} orders/hr (${result.coverage[selectedDay][h]} workers × ${rate})\n` +
-                  (isBreak ? `⚠️ Unmet: ${Math.round(unmet)} orders` : "✅ Covered");
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 3, minWidth: COL_W * 24 + 24 }}>
+                  {hourData.map(({ h, ophDemand, capacity, unmet, isPeak, isBreak }) => {
+                    const hasAnything = ophDemand > 0 || result.coverage[selectedDay][h] > 0;
+                    const demandVal   = Math.round(ophDemand);
+                    const capVal      = Math.round(capacity);
+                    const demandH     = hasAnything ? Math.max(4, Math.round((ophDemand / maxVal) * CHART_H)) : 0;
+                    const capH        = hasAnything ? Math.max(4, Math.round((capacity   / maxVal) * CHART_H)) : 0;
+                    const capColor    = isBreak ? "#F87171" : "#4ADE80";
 
-                return (
-                  <div
-                    key={h}
-                    title={tooltip}
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      cursor: "default",
-                    }}
-                  >
-                    {/* Break indicator */}
-                    <div style={{ height: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      {isBreak && (
-                        <span style={{ fontSize: 8, color: "#EF4444", fontWeight: 700 }}>!</span>
-                      )}
-                    </div>
-
-                    {/* Dual bars */}
-                    <div style={{ display: "flex", gap: 1, alignItems: "flex-end", height: 80 }}>
-                      {/* Demand bar (blue) */}
+                    return (
                       <div
+                        key={h}
                         style={{
-                          width: 7,
-                          height: demandH,
-                          backgroundColor: "#93C5FD", // blue-300
-                          borderRadius: "2px 2px 0 0",
-                          border: isPeak ? "1px solid #1D4ED8" : "none",
-                          boxSizing: "border-box",
+                          width: COL_W,
+                          flexShrink: 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
                         }}
-                      />
-                      {/* Capacity bar (green/red) */}
-                      <div
-                        style={{
-                          width: 7,
-                          height: capH,
-                          backgroundColor: capColor,
-                          borderRadius: "2px 2px 0 0",
-                          opacity: 0.85,
-                        }}
-                      />
-                    </div>
+                      >
+                        {/* Break warning badge */}
+                        <div style={{ height: 16, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 2 }}>
+                          {isBreak && (
+                            <span style={{
+                              fontSize: 9, fontWeight: 800, color: "#fff",
+                              background: "#EF4444", borderRadius: 3,
+                              padding: "1px 4px", letterSpacing: 0.3,
+                            }}>
+                              BREAK
+                            </span>
+                          )}
+                        </div>
 
-                    {/* Hour label */}
-                    <div style={{ fontSize: 8, color: isPeak ? "#1D4ED8" : "#9CA3AF", marginTop: 2, fontWeight: isPeak ? 700 : 400 }}>
-                      {String(h).padStart(2, "0")}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+                        {/* Bars with numbers on top */}
+                        <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: CHART_H }}>
+                          {/* Demand bar */}
+                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: CHART_H }}>
+                            {hasAnything && demandVal > 0 && (
+                              <span style={{
+                                fontSize: 9, fontWeight: 700,
+                                color: isPeak ? "#1D4ED8" : "#6B7280",
+                                marginBottom: 2, lineHeight: 1,
+                              }}>
+                                {demandVal}
+                              </span>
+                            )}
+                            <div
+                              style={{
+                                width: BAR_W,
+                                height: demandH,
+                                backgroundColor: "#93C5FD",
+                                borderRadius: "3px 3px 0 0",
+                                border: isPeak ? "2px solid #1D4ED8" : "none",
+                                boxSizing: "border-box",
+                              }}
+                            />
+                          </div>
+
+                          {/* Capacity bar */}
+                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: CHART_H }}>
+                            {hasAnything && capVal > 0 && (
+                              <span style={{
+                                fontSize: 9, fontWeight: 700,
+                                color: isBreak ? "#DC2626" : "#15803D",
+                                marginBottom: 2, lineHeight: 1,
+                              }}>
+                                {capVal}
+                              </span>
+                            )}
+                            <div
+                              style={{
+                                width: BAR_W,
+                                height: capH,
+                                backgroundColor: capColor,
+                                borderRadius: "3px 3px 0 0",
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Hour label */}
+                        <div style={{
+                          fontSize: 10, marginTop: 4, textAlign: "center",
+                          color: isPeak ? "#1D4ED8" : "#9CA3AF",
+                          fontWeight: isPeak ? 700 : 400,
+                          borderTop: isBreak ? "2px solid #FCA5A5" : "none",
+                          paddingTop: 2, width: "100%",
+                        }}>
+                          {String(h).padStart(2, "0")}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Chart legend */}
-          <div className="flex items-center gap-4 mt-2 text-xs text-gray-500 flex-wrap">
+          <div className="flex items-center gap-5 mt-3 text-xs text-gray-500 flex-wrap">
             <div className="flex items-center gap-1.5">
-              <div style={{ width: 10, height: 10, backgroundColor: "#93C5FD", borderRadius: 2 }} />
-              <span>OPH Demand (orders/hr)</span>
+              <div style={{ width: 12, height: 12, backgroundColor: "#93C5FD", borderRadius: 2 }} />
+              <span>OPH Demand</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <div style={{ width: 10, height: 10, backgroundColor: "#4ADE80", borderRadius: 2 }} />
+              <div style={{ width: 12, height: 12, backgroundColor: "#4ADE80", borderRadius: 2 }} />
               <span>Processing Capacity (workers × rate)</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <div style={{ width: 10, height: 10, backgroundColor: "#F87171", borderRadius: 2 }} />
-              <span>Capacity shortfall — slot breaks</span>
+              <div style={{ width: 12, height: 12, backgroundColor: "#F87171", borderRadius: 2 }} />
+              <span>Capacity shortfall</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <div style={{ width: 8, height: 10, border: "1px solid #1D4ED8", backgroundColor: "#93C5FD", borderRadius: 2 }} />
-              <span>Peak demand hour</span>
+              <div style={{ width: 12, height: 12, border: "2px solid #1D4ED8", backgroundColor: "#93C5FD", borderRadius: 2 }} />
+              <span>Peak hour</span>
             </div>
-            <span className="text-gray-400 italic">Hover bars for exact figures</span>
           </div>
 
           {/* Break slots detail — only if any */}

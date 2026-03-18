@@ -38,6 +38,7 @@ function matrixStats(oph: OphMatrix) {
 }
 
 export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
+  const [guarantee100, setGuarantee100] = useState(true);
   const [config, setConfig] = useState<OptimizerConfig>({
     productivityRate: 20,
     partTimerCapPct: 40,
@@ -52,6 +53,11 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
     partTimerCapPct: "40",
     weekenderCapPct: "30",
   });
+
+  // Effective config: when guarantee100 is on, force nonPeakTolerancePct to 0
+  const effectiveConfig: OptimizerConfig = guarantee100
+    ? { ...config, nonPeakTolerancePct: 0 }
+    : config;
 
   const stats = matrixStats(oph);
   const peakRequired = Math.ceil(stats.peakVal / config.productivityRate);
@@ -78,6 +84,39 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
             <StatCard label="Peak Demand" value={`${stats.peakVal} OPH`} />
             <StatCard label="Peak At" value={`${DAYS[stats.peakDay]} ${stats.peakHour}:00`} />
             <StatCard label="Active Slots" value={`${stats.activeSlots} / 168`} />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 100% fulfillment guarantee banner */}
+      <Card style={{ border: guarantee100 ? "1.5px solid #16a34a" : "1.5px solid #e5e7eb", background: guarantee100 ? "#f0fdf4" : "#fff" }}>
+        <CardContent className="pt-4">
+          <div className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              id="guarantee100"
+              checked={guarantee100}
+              onChange={(e) => {
+                setGuarantee100(e.target.checked);
+                if (e.target.checked) setConfig((prev) => ({ ...prev, nonPeakTolerancePct: 0 }));
+              }}
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 accent-green-600"
+            />
+            <div className="flex-1">
+              <Label htmlFor="guarantee100" className="text-sm font-semibold cursor-pointer" style={{ color: guarantee100 ? "#15803d" : "#111827" }}>
+                Guarantee 100% order fulfillment
+              </Label>
+              <p className="text-xs mt-0.5" style={{ color: guarantee100 ? "#166534" : "#6b7280" }}>
+                {guarantee100
+                  ? "Every hour with demand will be fully staffed. The solver will staff all slots to 100% — no unfulfilled orders. Non-peak tolerance is locked to 0%."
+                  : "Off — the solver may understaff non-peak slots based on the tolerance setting below, which can leave orders unfulfilled during quiet hours."}
+              </p>
+            </div>
+            {guarantee100 && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#15803d", background: "#dcfce7", borderRadius: 4, padding: "2px 8px", whiteSpace: "nowrap" }}>
+                ✓ Active
+              </span>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -154,18 +193,22 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
             </div>
 
             {/* Non-peak tolerance slider */}
-            <div className="md:col-span-3 pt-2 border-t space-y-2">
+            <div className={`md:col-span-3 pt-2 border-t space-y-2 ${guarantee100 ? "opacity-40 pointer-events-none" : ""}`}>
               <div className="flex items-center justify-between">
                 <Label className="text-sm font-medium">Non-peak tolerance</Label>
-                <span className="text-sm font-semibold text-blue-600">{config.nonPeakTolerancePct}%</span>
+                <span className="text-sm font-semibold text-blue-600">
+                  {guarantee100 ? "0%" : `${config.nonPeakTolerancePct}%`}
+                  {guarantee100 && <span className="ml-1 text-xs text-gray-400">(locked — 100% fill on)</span>}
+                </span>
               </div>
               <Slider
                 min={0}
                 max={20}
                 step={1}
-                value={[config.nonPeakTolerancePct]}
-                onValueChange={([v]) => setConfig((prev) => ({ ...prev, nonPeakTolerancePct: v }))}
+                value={[guarantee100 ? 0 : config.nonPeakTolerancePct]}
+                onValueChange={([v]) => { if (!guarantee100) setConfig((prev) => ({ ...prev, nonPeakTolerancePct: v })); }}
                 className="w-full"
+                disabled={guarantee100}
               />
               <p className="text-xs text-gray-500">
                 Off-peak slots (demand &lt;70% of day&apos;s peak) may be staffed this % below required.
@@ -193,7 +236,7 @@ export function ConfigPanel({ oph, onSolve, solving }: ConfigPanelProps) {
       </Card>
 
       <div className="flex justify-end">
-        <Button size="lg" onClick={() => onSolve(config)} disabled={solving} className="min-w-[220px]">
+        <Button size="lg" onClick={() => onSolve(effectiveConfig)} disabled={solving} className="min-w-[220px]">
           {solving ? (
             <span className="flex items-center gap-2">
               <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
