@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SolverResult, OptimizerConfig } from "@/lib/types";
 
@@ -43,6 +43,7 @@ interface UtilizationHeatmapProps {
 
 export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) {
   const [view, setView] = useState<ViewMode>("coverage");
+  const [selectedDay, setSelectedDay] = useState(0);
 
   let totalRequired = 0;
   let totalDeployed = 0;
@@ -271,8 +272,232 @@ export function UtilizationHeatmap({ result, config }: UtilizationHeatmapProps) 
           </table>
         </div>
 
+        {/* ── OPH Processing Capacity vs Demand ── */}
+        <OphCapacityPanel
+          result={result}
+          config={config}
+          selectedDay={selectedDay}
+          onSelectDay={setSelectedDay}
+        />
+
       </CardContent>
     </Card>
+  );
+}
+
+// ─── OPH Capacity Panel ───────────────────────────────────────────────────────
+
+function OphCapacityPanel({
+  result,
+  config,
+  selectedDay,
+  onSelectDay,
+}: {
+  result: SolverResult;
+  config: OptimizerConfig;
+  selectedDay: number;
+  onSelectDay: (d: number) => void;
+}) {
+  const rate = config.productivityRate;
+
+  // Per-hour data for selected day
+  const hourData = useMemo(() => {
+    return Array.from({ length: 24 }, (_, h) => {
+      // OPH demand: use result.oph if available, else back-compute from required
+      const ophDemand = result.oph
+        ? result.oph[selectedDay][h]
+        : result.required[selectedDay][h] * rate;
+      const deployed   = result.coverage[selectedDay][h];
+      const capacity   = deployed * rate;
+      const unmet      = Math.max(0, ophDemand - capacity);
+      const isPeak     = result.peakSlots?.[selectedDay]?.[h] ?? false;
+      const isBreak    = ophDemand > 0 && unmet > 0;
+      return { h, ophDemand, capacity, deployed, unmet, isPeak, isBreak };
+    });
+  }, [result, config, selectedDay, rate]);
+
+  // Day-level aggregates
+  const dayOPD      = hourData.reduce((s, r) => s + r.ophDemand, 0);
+  const dayCapacity = hourData.reduce((s, r) => s + r.capacity, 0);
+  const dayUnmet    = hourData.reduce((s, r) => s + r.unmet, 0);
+  const breakCount  = hourData.filter(r => r.isBreak).length;
+
+  // Scale bars to max value across demand and capacity for the day
+  const maxVal = Math.max(...hourData.map(r => Math.max(r.ophDemand, r.capacity)), 1);
+
+  // Only show hours with any demand OR deployed workers
+  const hasData = hourData.some(r => r.ophDemand > 0 || r.deployed > 0);
+
+  return (
+    <div>
+      <div className="flex items-baseline gap-2 mb-2">
+        <p className="text-xs font-medium text-gray-500">OPH Processing Capacity vs Demand</p>
+        <span className="text-xs text-gray-400">— which slots can break?</span>
+      </div>
+
+      {/* Day tabs */}
+      <div className="flex gap-1 mb-3 flex-wrap">
+        {DAYS.map((day, d) => {
+          const dayReq = result.required[d].reduce((a, b) => a + b, 0);
+          if (dayReq === 0) return null;
+          return (
+            <button
+              key={day}
+              onClick={() => onSelectDay(d)}
+              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                selectedDay === d
+                  ? "bg-gray-900 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              {day}
+            </button>
+          );
+        })}
+      </div>
+
+      {!hasData ? (
+        <p className="text-xs text-gray-400 italic">No demand data for this day.</p>
+      ) : (
+        <>
+          {/* Summary strip */}
+          <div className="grid grid-cols-4 gap-2 mb-4">
+            <MiniKpi label="OPD (Orders / Day)" value={Math.round(dayOPD).toLocaleString()} color="blue" />
+            <MiniKpi label="Total Capacity (orders)" value={Math.round(dayCapacity).toLocaleString()} color={dayCapacity >= dayOPD ? "green" : "red"} />
+            <MiniKpi label="Unfulfilled Orders" value={Math.round(dayUnmet).toLocaleString()} color={dayUnmet > 0 ? "red" : "green"} />
+            <MiniKpi label="Break Slots" value={`${breakCount} hr${breakCount !== 1 ? "s" : ""}`} color={breakCount > 0 ? "red" : "green"} />
+          </div>
+
+          {/* Bar chart */}
+          <div className="overflow-x-auto pb-1">
+            <div style={{ display: "flex", gap: 2, alignItems: "flex-end", minWidth: 600 }}>
+              {hourData.map(({ h, ophDemand, capacity, unmet, isPeak, isBreak }) => {
+                const hasAnything = ophDemand > 0 || result.coverage[selectedDay][h] > 0;
+                if (!hasAnything) {
+                  return (
+                    <div key={h} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                      <div style={{ height: 80 }} />
+                      <div style={{ fontSize: 8, color: "#d1d5db", marginTop: 2 }}>{String(h).padStart(2, "0")}</div>
+                    </div>
+                  );
+                }
+
+                const demandH = Math.round((ophDemand / maxVal) * 80);
+                const capH    = Math.round((capacity   / maxVal) * 80);
+                const capColor = isBreak ? "#F87171" : "#4ADE80"; // red-400 / green-400
+
+                const tooltip = `${DAYS[selectedDay]} ${String(h).padStart(2, "0")}:00\n` +
+                  `Demand: ${Math.round(ophDemand)} orders/hr\n` +
+                  `Capacity: ${Math.round(capacity)} orders/hr (${result.coverage[selectedDay][h]} workers × ${rate})\n` +
+                  (isBreak ? `⚠️ Unmet: ${Math.round(unmet)} orders` : "✅ Covered");
+
+                return (
+                  <div
+                    key={h}
+                    title={tooltip}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      cursor: "default",
+                    }}
+                  >
+                    {/* Break indicator */}
+                    <div style={{ height: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {isBreak && (
+                        <span style={{ fontSize: 8, color: "#EF4444", fontWeight: 700 }}>!</span>
+                      )}
+                    </div>
+
+                    {/* Dual bars */}
+                    <div style={{ display: "flex", gap: 1, alignItems: "flex-end", height: 80 }}>
+                      {/* Demand bar (blue) */}
+                      <div
+                        style={{
+                          width: 7,
+                          height: demandH,
+                          backgroundColor: "#93C5FD", // blue-300
+                          borderRadius: "2px 2px 0 0",
+                          border: isPeak ? "1px solid #1D4ED8" : "none",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                      {/* Capacity bar (green/red) */}
+                      <div
+                        style={{
+                          width: 7,
+                          height: capH,
+                          backgroundColor: capColor,
+                          borderRadius: "2px 2px 0 0",
+                          opacity: 0.85,
+                        }}
+                      />
+                    </div>
+
+                    {/* Hour label */}
+                    <div style={{ fontSize: 8, color: isPeak ? "#1D4ED8" : "#9CA3AF", marginTop: 2, fontWeight: isPeak ? 700 : 400 }}>
+                      {String(h).padStart(2, "0")}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Chart legend */}
+          <div className="flex items-center gap-4 mt-2 text-xs text-gray-500 flex-wrap">
+            <div className="flex items-center gap-1.5">
+              <div style={{ width: 10, height: 10, backgroundColor: "#93C5FD", borderRadius: 2 }} />
+              <span>OPH Demand (orders/hr)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div style={{ width: 10, height: 10, backgroundColor: "#4ADE80", borderRadius: 2 }} />
+              <span>Processing Capacity (workers × rate)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div style={{ width: 10, height: 10, backgroundColor: "#F87171", borderRadius: 2 }} />
+              <span>Capacity shortfall — slot breaks</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div style={{ width: 8, height: 10, border: "1px solid #1D4ED8", backgroundColor: "#93C5FD", borderRadius: 2 }} />
+              <span>Peak demand hour</span>
+            </div>
+            <span className="text-gray-400 italic">Hover bars for exact figures</span>
+          </div>
+
+          {/* Break slots detail — only if any */}
+          {breakCount > 0 && (
+            <div className="mt-3 rounded-md border border-red-100 bg-red-50 px-3 py-2">
+              <p className="text-xs font-semibold text-red-700 mb-1.5">⚠️ Break Slots — orders cannot be fully processed</p>
+              <div className="flex flex-wrap gap-2">
+                {hourData.filter(r => r.isBreak).map(r => (
+                  <div key={r.h} className="text-xs bg-white border border-red-200 rounded px-2 py-0.5 text-red-800">
+                    <span className="font-medium">{String(r.h).padStart(2, "0")}:00</span>
+                    <span className="text-red-500 ml-1">–{Math.round(r.unmet)} orders unmet</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function MiniKpi({ label, value, color }: { label: string; value: string; color: "blue" | "green" | "red" }) {
+  const colorMap = {
+    blue:  { bg: "#EFF6FF", val: "#1D4ED8" },
+    green: { bg: "#F0FDF4", val: "#166534" },
+    red:   { bg: "#FEF2F2", val: "#991B1B" },
+  };
+  const c = colorMap[color];
+  return (
+    <div style={{ backgroundColor: c.bg, borderRadius: 8, padding: "8px 12px" }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: c.val, lineHeight: 1.2 }}>{value}</div>
+      <div style={{ fontSize: 10, color: "#6B7280", marginTop: 2 }}>{label}</div>
+    </div>
   );
 }
 
