@@ -236,7 +236,7 @@ def solve(inp):
                 prev_day = (d - 1) % 7
                 for k, var in xFT.items():
                     s, p, bs1, bs2 = k
-                    if s < 20 or p == prev_day:
+                    if s < 20 or p == d:
                         continue
                     shift_hs = 2 * (h + 24 - s) + half
                     if 0 <= shift_hs <= 17 and shift_hs not in (bs1, bs2):
