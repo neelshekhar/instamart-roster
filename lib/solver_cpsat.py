@@ -246,11 +246,15 @@ def solve(inp):
                     if 0 <= shift_hs <= 17 and shift_hs not in (bs1, bs2):
                         terms.append(var)
 
-                # FT overnight: shift started on prev_day, hour falls on day d
+                # FT overnight: shift started on prev_day, hour falls on day d.
+                # Skip if p == prev_day: worker's day-off is prev_day, so they
+                # never started a shift that night and can't cover this morning.
+                # (p == d would be wrong: a worker with day-off on d still works
+                # the overnight shift that started on prev_day.)
                 prev_day = (d - 1) % 7
                 for k, var in xFT.items():
                     s, p, bs1, bs2 = k
-                    if s < 20 or p == d:
+                    if s < 20 or p == prev_day:
                         continue
                     shift_hs = 2 * (h + 24 - s) + half
                     if 0 <= shift_hs <= 17 and shift_hs not in (bs1, bs2):
