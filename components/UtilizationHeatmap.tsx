@@ -368,20 +368,18 @@ function OphCapacityPanel({
             <MiniKpi label="Break Slots" value={`${breakCount} hr${breakCount !== 1 ? "s" : ""}`} color={breakCount > 0 ? "red" : "green"} />
           </div>
 
-          {/* Bar chart */}
+          {/* Bar chart — full width, no horizontal scroll */}
           {(() => {
-            const CHART_H = 160;  // bar area height px
-            const BAR_W   = 16;   // width of each individual bar
-            const COL_W   = BAR_W * 2 + 6; // column width: 2 bars + gap + padding
+            const CHART_H = 160;
 
             return (
-              <div className="overflow-x-auto pb-2" style={{ borderRadius: 8, border: "1px solid #e5e7eb", background: "#fafafa", padding: "12px 8px 8px" }}>
-                {/* Y-axis label */}
+              <div style={{ borderRadius: 8, border: "1px solid #e5e7eb", background: "#fafafa", padding: "12px 8px 8px" }}>
                 <div style={{ fontSize: 10, color: "#9CA3AF", marginBottom: 6, paddingLeft: 4 }}>
                   Orders / hr
                 </div>
 
-                <div style={{ display: "flex", alignItems: "flex-end", gap: 3, minWidth: COL_W * 24 + 24 }}>
+                {/* Full-width flex — columns grow to fill space */}
+                <div style={{ display: "flex", alignItems: "flex-end", width: "100%" }}>
                   {hourData.map(({ h, ophDemand, capacity, unmet, isPeak, isBreak }) => {
                     const hasAnything = ophDemand > 0 || result.coverage[selectedDay][h] > 0;
                     const demandVal   = Math.round(ophDemand);
@@ -394,80 +392,81 @@ function OphCapacityPanel({
                       <div
                         key={h}
                         style={{
-                          width: COL_W,
-                          flexShrink: 0,
+                          flex: 1,
+                          minWidth: 0,
                           display: "flex",
                           flexDirection: "column",
                           alignItems: "center",
+                          // Visual separation: right border between every hour group
+                          borderRight: h < 23 ? "1px solid #e5e7eb" : "none",
+                          padding: "0 2px",
+                          background: isBreak ? "rgba(254,226,226,0.25)" : h % 2 === 0 ? "transparent" : "rgba(249,250,251,0.6)",
                         }}
                       >
-                        {/* Break warning badge */}
+                        {/* Break badge */}
                         <div style={{ height: 16, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 2 }}>
                           {isBreak && (
                             <span style={{
-                              fontSize: 9, fontWeight: 800, color: "#fff",
+                              fontSize: 8, fontWeight: 800, color: "#fff",
                               background: "#EF4444", borderRadius: 3,
-                              padding: "1px 4px", letterSpacing: 0.3,
+                              padding: "1px 3px", letterSpacing: 0.2, whiteSpace: "nowrap",
                             }}>
                               BREAK
                             </span>
                           )}
                         </div>
 
-                        {/* Bars with numbers on top */}
-                        <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: CHART_H }}>
+                        {/* Bars with labels */}
+                        <div style={{ display: "flex", gap: 1, alignItems: "flex-end", height: CHART_H, width: "100%" }}>
                           {/* Demand bar */}
-                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: CHART_H }}>
+                          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: CHART_H, minWidth: 0 }}>
                             {hasAnything && demandVal > 0 && (
                               <span style={{
-                                fontSize: 9, fontWeight: 700,
+                                fontSize: 8, fontWeight: 700,
                                 color: isPeak ? "#1D4ED8" : "#6B7280",
-                                marginBottom: 2, lineHeight: 1,
+                                marginBottom: 2, lineHeight: 1, whiteSpace: "nowrap",
                               }}>
                                 {demandVal}
                               </span>
                             )}
-                            <div
-                              style={{
-                                width: BAR_W,
-                                height: demandH,
-                                backgroundColor: "#93C5FD",
-                                borderRadius: "3px 3px 0 0",
-                                border: isPeak ? "2px solid #1D4ED8" : "none",
-                                boxSizing: "border-box",
-                              }}
-                            />
+                            <div style={{
+                              width: "100%",
+                              height: demandH,
+                              backgroundColor: "#93C5FD",
+                              borderRadius: "3px 3px 0 0",
+                              border: isPeak ? "2px solid #1D4ED8" : "none",
+                              boxSizing: "border-box",
+                            }} />
                           </div>
 
                           {/* Capacity bar */}
-                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: CHART_H }}>
+                          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: CHART_H, minWidth: 0 }}>
                             {hasAnything && capVal > 0 && (
                               <span style={{
-                                fontSize: 9, fontWeight: 700,
+                                fontSize: 8, fontWeight: 700,
                                 color: isBreak ? "#DC2626" : "#15803D",
-                                marginBottom: 2, lineHeight: 1,
+                                marginBottom: 2, lineHeight: 1, whiteSpace: "nowrap",
                               }}>
                                 {capVal}
                               </span>
                             )}
-                            <div
-                              style={{
-                                width: BAR_W,
-                                height: capH,
-                                backgroundColor: capColor,
-                                borderRadius: "3px 3px 0 0",
-                              }}
-                            />
+                            <div style={{
+                              width: "100%",
+                              height: capH,
+                              backgroundColor: capColor,
+                              borderRadius: "3px 3px 0 0",
+                            }} />
                           </div>
                         </div>
 
                         {/* Hour label */}
                         <div style={{
                           fontSize: 10, marginTop: 4, textAlign: "center",
-                          color: isPeak ? "#1D4ED8" : "#9CA3AF",
-                          fontWeight: isPeak ? 700 : 400,
-                          borderTop: isBreak ? "2px solid #FCA5A5" : "none",
-                          paddingTop: 2, width: "100%",
+                          color: isPeak ? "#1D4ED8" : "#6B7280",
+                          fontWeight: isPeak ? 700 : 500,
+                          paddingTop: 3,
+                          borderTop: `2px solid ${isBreak ? "#FCA5A5" : isPeak ? "#BFDBFE" : "#e5e7eb"}`,
+                          width: "100%",
                         }}>
                           {String(h).padStart(2, "0")}
                         </div>
