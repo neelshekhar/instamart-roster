@@ -403,24 +403,57 @@ def solve(inp):
             })
             wid += 1; wpt_count += 1
 
-    # ── Coverage matrix ───────────────────────────────────────────────────────
-    coverage = [[0] * 24 for _ in range(7)]
+    # ── Coverage matrix (half-slot level) ────────────────────────────────────
+    # The solver constraint is per-half-slot (every 30 min). A worker with a
+    # break at only ONE half-slot of an hour still covers the other half-slot.
+    # The old approach (count only hours where BOTH half-slots are productive)
+    # systematically undercounts, making order fill rate < 100% even when the
+    # solver fully satisfies all constraints.
+    #
+    # Fix: accumulate coverage at the 48-half-slot level, then for each hour
+    # set coverage[d][h] = min(hs_:00 count, hs_:30 count) — the bottleneck
+    # within the hour, which is what determines whether all orders are served.
+    hs_cov = [[0] * 48 for _ in range(7)]  # [day][half-slot 0..47]
+
     for w in workers:
         active_days = (
             [5, 6] if w["type"] in ("WFT", "WPT")
             else [d for d in ALL_DAYS if d != w["dayOff"]]
         )
-        for d in active_days:
-            for h in w["productiveHours"]:
-                if 0 <= h < 24:
-                    if h < w["shiftStart"]:
-                        # Overnight wrap — hour belongs to next calendar day.
-                        # For WFT: only Sat→Sun is valid (WFT doesn't work Mon).
-                        if w["type"] == "WFT" and d == 6:
-                            continue  # Skip Sun→Mon overflow for WFT
-                        coverage[(d + 1) % 7][h] += 1
+        breaks = set(w.get("breakHalfSlots", []))
+        s = w["shiftStart"]
+
+        if w["type"] in ("FT", "WFT"):
+            for shift_h in range(9):
+                for half in range(2):
+                    shift_hs = 2 * shift_h + half
+                    if shift_hs in breaks:
+                        continue  # worker is on break this half-slot
+                    raw_h = s + shift_h
+                    if raw_h >= 24:  # overnight: belongs to next calendar day
+                        cal_h = raw_h - 24
+                        abs_hs = 2 * cal_h + half
+                        for d in active_days:
+                            if w["type"] == "WFT" and d == 6:
+                                continue  # WFT doesn't work Mon
+                            hs_cov[(d + 1) % 7][abs_hs] += 1
                     else:
-                        coverage[d][h] += 1
+                        abs_hs = 2 * raw_h + half
+                        for d in active_days:
+                            hs_cov[d][abs_hs] += 1
+        else:  # PT / WPT — 4-hour shifts, no breaks
+            for shift_h in range(4):
+                raw_h = s + shift_h  # PT_STARTS max=20, +3=23 < 24, no overnight
+                abs_hs_base = 2 * raw_h
+                for d in active_days:
+                    hs_cov[d][abs_hs_base]     += 1
+                    hs_cov[d][abs_hs_base + 1] += 1
+
+    # Convert to hourly coverage = min of the two half-slot counts (bottleneck)
+    coverage = [
+        [min(hs_cov[d][2 * h], hs_cov[d][2 * h + 1]) for h in range(24)]
+        for d in range(7)
+    ]
 
     required = [
         [math.ceil(oph[d][h] / rate) if oph[d][h] > 0 else 0 for h in range(24)]
