@@ -180,13 +180,27 @@ def solve(inp):
             _peak_cache[(d, s)] = _raw_shift_peak_hours(d, s)
         return _peak_cache[(d, s)]
 
+    # For each (s, p), prefer break pairs that don't conflict with peak demand.
+    # If no valid break pair exists (e.g. FT s=15 with 20-23h peak), fall back
+    # to allowing ALL break pairs so the shift is not eliminated entirely.
+    def get_valid_break_pairs_ft(s, p):
+        valid = [(bs1, bs2) for (bs1, bs2) in FT_BREAK_HALF_SLOTS
+                 if is_break_valid_ft(s, p, bs1, bs2)]
+        return valid if valid else list(FT_BREAK_HALF_SLOTS)
+
     ft_keys  = [(s, p, bs1, bs2) for s in FT_STARTS for p in day_off_days
-                for (bs1, bs2) in FT_BREAK_HALF_SLOTS
-                if is_active_ft(s, p, bs1, bs2) and is_break_valid_ft(s, p, bs1, bs2)]
+                for (bs1, bs2) in get_valid_break_pairs_ft(s, p)
+                if is_active_ft(s, p, bs1, bs2)]
     pt_keys  = [(s, p) for s in PT_STARTS for p in day_off_days
                 if use_pt and is_active_pt(s, p)]
-    wft_keys = [(s, bs1, bs2) for s in WFT_STARTS for (bs1, bs2) in FT_BREAK_HALF_SLOTS
-                if use_wft and is_active_wft(s, bs1, bs2) and is_break_valid_wft(s, bs1, bs2)]
+    def get_valid_break_pairs_wft(s):
+        valid = [(bs1, bs2) for (bs1, bs2) in FT_BREAK_HALF_SLOTS
+                 if is_break_valid_wft(s, bs1, bs2)]
+        return valid if valid else list(FT_BREAK_HALF_SLOTS)
+
+    wft_keys = [(s, bs1, bs2) for s in WFT_STARTS
+                for (bs1, bs2) in (get_valid_break_pairs_wft(s) if use_wft else [])
+                if is_active_wft(s, bs1, bs2)]
     wpt_keys = [s for s in PT_STARTS if use_wpt and is_active_wpt(s)]
 
     # ── Build CP-SAT model ────────────────────────────────────────────────────
